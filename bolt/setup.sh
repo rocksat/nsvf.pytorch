@@ -30,5 +30,7 @@ pip3 install -r requirements.txt
 python3 setup.py build_ext --inplace 
 
 echo_time "Install additional libraries for NSVF"
+pip3 install --upgrade torchvision
+pip3 install --upgrade awscli
 
 echo_time "Setup step done"
