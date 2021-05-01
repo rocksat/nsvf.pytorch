@@ -13,6 +13,8 @@ import math
 import os
 import random
 import sys
+import subprocess
+import shlex
 
 import numpy as np
 import torch
@@ -51,6 +53,9 @@ def main(args, init_distributed=False):
 
     if distributed_utils.is_master(args):
         checkpoint_utils.verify_checkpoint_directory(args.save_dir)
+
+    # setup tensorboard
+    setup_tensorboard(args)
 
     # Print args
     logger.info(args)
@@ -329,6 +334,30 @@ def get_valid_stats(args, trainer, stats):
             stats[args.best_checkpoint_metric],
         )
     return stats
+
+
+def setup_tensorboard(args):
+    # use a folder under Bolt's artifact directory to store TF summaries
+    if getattr(args, 'tensorboard_logdir', None) is None:
+        try:
+            import turibolt as bolt
+        except ImportError:
+            from argparse import Namespace
+            bolt = Namespace(
+                **{"ARTIFACT_DIR": "/task_wrapper/user_output/artifacts"})
+        results_dir = bolt.ARTIFACT_DIR
+        summary_dir = os.path.join(results_dir, 'summary')
+        if not os.path.exists(summary_dir):
+            os.makedirs(summary_dir)
+        args.tensorboard_logdir = summary_dir
+
+    # open a process for TensorBoard
+    tbp = os.environ.get("TENSORBOARD_PORT")
+    # NB: remove `--bind_all` for TF below 2.0.0
+    command = 'tensorboard --logdir {} --port {} --bind_all'.format(
+        args.tensorboard_logdir, tbp)
+    subprocess.Popen(shlex.split(command), stdout=subprocess.PIPE,
+                     stderr=subprocess.PIPE, env=os.environ.copy())
 
 
 def distributed_main(i, args, start_rank=0):
