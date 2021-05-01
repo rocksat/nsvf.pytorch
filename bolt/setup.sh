@@ -32,5 +32,6 @@ python3 setup.py build_ext --inplace
 echo_time "Install additional libraries for NSVF"
 pip3 install --upgrade torchvision
 pip3 install --upgrade awscli
+pip3 install --upgrade tensorboard
 
 echo_time "Setup step done"
