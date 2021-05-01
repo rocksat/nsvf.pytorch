@@ -173,8 +173,9 @@ class SRNLossCriterion(RenderingCriterion):
 
         if self.args.depth_weight > 0:
             if sample['depths'] is not None:
+                target_depths = sample['depths']
                 target_depths = target_depths.gather(2, flatten_index)
-                depth_mask = masks & (target_depths > 0)
+                depth_mask = masks & (target_depths > 0) if masks is not None else None
                 depth_loss = utils.depth_loss(net_output['depths'], target_depths, depth_mask)
                 
             else:
