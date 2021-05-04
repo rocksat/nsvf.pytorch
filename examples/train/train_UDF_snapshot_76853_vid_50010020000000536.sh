@@ -22,17 +22,15 @@ python3 train.py ${DATASET} \
     --train-views "0..90" \
     --view-resolution $RES \
     --max-sentences 1 \
-    --view-per-batch 2 \
+    --view-per-batch 1 \
     --pixel-per-view 2048 \
     --no-preload \
     --sampling-on-mask 1.0 \
-    --sampling-patch-size 5 \
     --valid-view-resolution $RES \
     --valid-views "90..97" \
     --valid-view-per-batch 1 \
     --transparent-background "0.0,0.0,0.0" \
     --background-stop-gradient \
-    --load-mask \
     --load-depth \
     --arch $ARCH \
     --initial-boundingbox ${DATASET}/bbox.txt \
