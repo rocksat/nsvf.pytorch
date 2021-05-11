@@ -1,9 +1,9 @@
-DATA="UDF_snapshot_76853_vid_50010020000000536_NSVF_format"
+DATA=${DATA}"_NSVF_format"
 RES="480x640"
 ARCH="nsvf_base"
 SUFFIX="v1"
 DATASET=/task_runtime/datasets
-SAVE=/task_runtime/saved/${DATA}
+SAVE=$BOLT_ARTIFACT_DIR/saved/${DATA}
 MODEL=$ARCH$SUFFIX
 mkdir -p $SAVE/$MODEL
 mkdir -p ${DATASET}
@@ -23,13 +23,14 @@ python3 train.py ${DATASET} \
     --view-resolution $RES \
     --max-sentences 1 \
     --view-per-batch 1 \
-    --pixel-per-view 2048 \
+    --pixel-per-view 1024 \
     --no-preload \
     --sampling-on-mask 1.0 \
+    --no-sampling-at-reader \
     --valid-view-resolution $RES \
     --valid-views "90..97" \
     --valid-view-per-batch 1 \
-    --transparent-background "0.0,0.0,0.0" \
+    --transparent-background "1.0,1.0,1.0" \
     --background-stop-gradient \
     --load-depth \
     --arch $ARCH \
@@ -57,3 +58,21 @@ python3 train.py ${DATASET} \
     --log-format simple --log-interval 1 \
     --tensorboard-logdir ${SAVE}/tensorboard/${MODEL} \
     --save-dir ${SAVE}/${MODEL}
+
+# start render on bolt
+MODEL_PATH=$SAVE/$MODEL/checkpoint_last.pt
+python3 render.py ${DATASET} \
+    --user-dir nsvf \
+    --task single_object_rendering \
+    --path ${MODEL_PATH} \
+    --model-overrides '{"chunk_size":256,"raymarching_tolerance":0.01}' \
+    --render-beam 1 \
+    --render-num-frames 90 \
+    --render-save-fps 24 \
+    --render-resolution $RES \
+    --render-camera-poses ${DATASET}/platform_poses \
+    --render-views "0..96" \
+    --render-output ${SAVE}/output \
+    --render-output-types "color" "depth" "normal" \
+    --render-combine-output \
+    --log-format "simple"

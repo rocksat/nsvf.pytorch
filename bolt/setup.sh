@@ -23,15 +23,16 @@ echo_time "Setting up pip config"
 pip3 config set global.index-url 'https://pypi.apple.com/simple'
 pip3 config set global.extra-index-url 'https://pypi.python.org/simple'
 
-echo_time "Install pre-requirement for NSVF"
-git clone https://github.com/rocksat/nsvf.pytorch.git --recursive
-cd nsvf.pytorch
-pip3 install -r requirements.txt
-python3 setup.py build_ext --inplace 
-
 echo_time "Install additional libraries for NSVF"
 pip3 install --upgrade torchvision
 pip3 install --upgrade awscli
 pip3 install --upgrade tensorboard
+pip3 install --upgrade turibolt
+
+echo_time "Install pre-requirement for NSVF"
+git clone https://github.com/rocksat/nsvf.pytorch.git --recursive
+cd nsvf.pytorch
+pip3 install -r requirements.txt
+python3 setup.py build_ext --inplace
 
 echo_time "Setup step done"
