@@ -29,10 +29,13 @@ pip3 install --upgrade awscli
 pip3 install --upgrade tensorboard
 pip3 install --upgrade turibolt
 
-echo_time "Install pre-requirement for NSVF"
-git clone https://github.com/rocksat/nsvf.pytorch.git --recursive
-cd nsvf.pytorch
-pip3 install -r requirements.txt
-python3 setup.py build_ext --inplace
+if [ -n "${DATA}" ]
+then
+  echo_time "Install install NSVF"
+  git clone https://github.com/rocksat/nsvf.pytorch.git --recursive
+  cd nsvf.pytorch
+  pip3 install -r requirements.txt
+  python3 setup.py build_ext --inplace
+fi
 
 echo_time "Setup step done"

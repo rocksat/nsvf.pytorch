@@ -5,25 +5,30 @@ SUFFIX="v1"
 DATASET=/task_runtime/datasets
 SAVE=$BOLT_ARTIFACT_DIR/saved/${DATA}
 MODEL=$ARCH$SUFFIX
-mkdir -p $SAVE/$MODEL
-mkdir -p ${DATASET}
+MODEL_PATH=$SAVE/$MODEL/checkpoint_last.pt
 
-# download dataset
-BLOBBY="aws --endpoint-url https://blob.mr3.simcloud.apple.com"
-S3_SRC="s3://chbucket/nsvf"
-${BLOBBY} s3 cp ${S3_SRC}/${DATA}.tar.gz .
-tar -zxf ${DATA}.tar.gz -C ${DATASET}
-DATASET=${DATASET}/${DATA}
+function makedir() {
+  mkdir -p $SAVE/$MODEL
+  mkdir -p ${DATASET}
+}
 
-# start training on bolt
-python3 train.py ${DATASET} \
+function download() {
+  BLOBBY="aws --endpoint-url https://blob.mr3.simcloud.apple.com"
+  S3_SRC="s3://chbucket/nsvf"
+  ${BLOBBY} s3 cp ${S3_SRC}/${DATA}.tar.gz .
+  tar -zxf ${DATA}.tar.gz -C ${DATASET}
+  DATASET=${DATASET}/${DATA}
+}
+
+function train() {
+cd nsvf.pytorch && python3 train.py ${DATASET} \
     --user-dir fairnr \
     --task single_object_rendering \
     --train-views "0..90" \
     --view-resolution $RES \
     --max-sentences 1 \
     --view-per-batch 1 \
-    --pixel-per-view 1024 \
+    --pixel-per-view 2048 \
     --no-preload \
     --sampling-on-mask 1.0 \
     --no-sampling-at-reader \
@@ -58,11 +63,11 @@ python3 train.py ${DATASET} \
     --log-format simple --log-interval 1 \
     --tensorboard-logdir ${SAVE}/tensorboard/${MODEL} \
     --save-dir ${SAVE}/${MODEL}
+}
 
-# start render on bolt
-MODEL_PATH=$SAVE/$MODEL/checkpoint_last.pt
-python3 render.py ${DATASET} \
-    --user-dir nsvf \
+function render() {
+cd nsvf.pytorch && python3 render.py ${DATASET} \
+    --user-dir fairnr \
     --task single_object_rendering \
     --path ${MODEL_PATH} \
     --model-overrides '{"chunk_size":256,"raymarching_tolerance":0.01}' \
@@ -76,3 +81,16 @@ python3 render.py ${DATASET} \
     --render-output-types "color" "depth" "normal" \
     --render-combine-output \
     --log-format "simple"
+}
+
+# make folder
+makedir
+
+# download datasets
+download
+
+# start training on bolt
+train
+
+# start render on bolt
+render
