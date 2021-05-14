@@ -28,7 +28,7 @@ cd nsvf.pytorch && python3 train.py ${DATASET} \
     --view-resolution $RES \
     --max-sentences 1 \
     --view-per-batch 1 \
-    --pixel-per-view 2048 \
+    --pixel-per-view 1024 \
     --no-preload \
     --sampling-on-mask 1.0 \
     --no-sampling-at-reader \
@@ -38,6 +38,7 @@ cd nsvf.pytorch && python3 train.py ${DATASET} \
     --transparent-background "1.0,1.0,1.0" \
     --background-stop-gradient \
     --load-depth \
+    --load-mask \
     --arch $ARCH \
     --initial-boundingbox ${DATASET}/bbox.txt \
     --raymarching-stepsize-ratio 0.125 \
@@ -93,4 +94,4 @@ download
 train
 
 # start render on bolt
-render
+# render
