@@ -57,7 +57,7 @@ class NeRFModel(BaseModel):
             samples = self.encoder.ray_sample(intersection_outputs)
         field = self.field_fine if fine and (self.field_fine is not None) else self.field 
         all_results = self.raymarcher(
-            self.encoder, field, ray_start, ray_dir, samples, encoder_states
+            self.encoder, self.bg_field, field, ray_start, ray_dir, self.field.bg_color.depth, samples, encoder_states
         )
         return samples, all_results
 
