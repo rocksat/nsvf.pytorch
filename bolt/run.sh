@@ -35,7 +35,7 @@ cd nsvf.pytorch && python3 train.py ${DATASET} \
     --valid-view-resolution $RES \
     --valid-views "90..97" \
     --valid-view-per-batch 1 \
-    --transparent-background "1.0,1.0,1.0" \
+    --transparent-background "0.0,0.0,0.0" \
     --background-stop-gradient \
     --arch $ARCH \
     --initial-boundingbox ${DATASET}/bbox.txt \
