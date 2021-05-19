@@ -1,6 +1,6 @@
 DATA=${DATA}"_NSVF_format"
 RES="480x640"
-ARCH="nsvf_base"
+ARCH="nsvf_bg"
 SUFFIX="v1"
 DATASET=/task_runtime/datasets
 SAVE=$BOLT_ARTIFACT_DIR/saved/${DATA}
