@@ -9,6 +9,7 @@ import torch.nn.functional as F
 import torch.distributed as dist
 
 import numpy as np
+import open3d as o3d
 import math
 import sys
 import os
@@ -720,31 +721,23 @@ class LocalImageSparseVoxelEncoder(SparseVoxelEncoder):
 
     def __init__(self, args, voxel_path=None, bbox_path=None, shared_values=None):
         super().__init__(args, voxel_path, bbox_path, shared_values)
-        logger.info("Initialize local Image Sparse Voxel Encoder ...")
 
         # ------------ Initialize Images ------------
-        self.C = 3
-        self.H = args.resolution[0]
-        self.W = args.resolution[1]
-        self.view_aggr = args.view_aggr
-        self.encoder_type = args.encoder_type
-        self.backbone = args.backbone
-        self.freeze_weights = args.freeze_weights
-        self.image_feature_path = args.image_feature_path
+        self.resolution = [int(r) for r in self.args.view_resolution.split('x')]
+        self.C, self.H, self.W = 3, self.resolution[0], self.resolution[1]
+        self.view_aggr = 'attsets'
+        self.backbone = 'resnet34_64d'
+        self.freeze_weights = True
+        self.image_feature_path = None
 
-    def add_args(parser):
-        parser.add_argument('--view-aggr', type=str, help='the initial bounding box to initialize the model')
-        parser.add_argument('--encoder-type', type=float, metavar='D', help='voxel size of the input points (initial')
-        parser.add_argument('--backbone', type=int, metavar='N', help="embedding size")
-        parser.add_argument('--freeze-weights', type=str, help='path for pretrained voxel file. if provided no update')
-        parser.add_argument('--image-feature-path', type=str, help='pre-saved image feature path')
-
-    def extract_image_feature(self):
+    def extract_image_feature(self, path, backbone):
         pass
 
     @torch.no_grad()
-    def preload_image_feature(self):
-        pass
+    def preload_image_feature(self, path, backbone):
+        features = torch.load("{}/{}/features.pt".format(path, backbone))
+        cameras = torch.load("{}/{}/cameras.pt".format(path, backbone))
+        return features, cameras
 
     @torch.no_grad()
     def index_features(self, features, uv):
@@ -753,12 +746,11 @@ class LocalImageSparseVoxelEncoder(SparseVoxelEncoder):
         :param uv (Nviews, Nsamples, 2) image points (x,y)
         :return sampled features [Nviews, K, Nsamples], K is latent size
         """
-        twos = torch.tensor([2.0, 2.0], dtype=torch.float32, device=self.device)
-        image_size = torch.tensor([self.W, self.H], device=self.device)
+        twos = torch.tensor([2.0, 2.0], dtype=torch.float32)
+        image_size = torch.tensor([self.W, self.H])
         sample_grid = torch.div(twos, image_size) * uv - 1.0
         sample_grid = sample_grid.unsqueeze(2)  # (Nviews, Nsamples, 1, 2)
-        samples = F.grid_sample(features.cuda(), sample_grid, align_corners=False,
-                                mode="bilinear", padding_mode="border")
+        samples = F.grid_sample(features, sample_grid, mode="bilinear", padding_mode="border")
         return samples[:, :, :, 0]  # (Nviews, K, Nsamples)
 
     @torch.enable_grad()
@@ -769,7 +761,6 @@ class LocalImageSparseVoxelEncoder(SparseVoxelEncoder):
         self.features size: torch.Size([Nviews, K, H/2, W/2]), feature volume
         inputs['emb'].shape: torch.Size([Nsamples, K])
         """
-
         # =========== Get ray point samples ===========
         sampled_xyz = samples['sampled_point_xyz'].requires_grad_(True)  # [Nsamples, 3]
         sampled_dir = samples['sampled_point_ray_direction']
@@ -1151,19 +1142,16 @@ class TriangleMeshEncoder(SparseVoxelEncoder):
 
 def bbox2voxels(bbox, voxel_size):
     vox_min, vox_max = bbox[:3], bbox[3:]
-    vox_min += voxel_size / 2
-    vox_max -= voxel_size / 2
-    steps = np.ceil((vox_max - vox_min) / voxel_size).astype('int64') + 1
-    x, y, z = [c.reshape(-1).astype('float32')
-               for c in np.meshgrid(np.arange(steps[0]), np.arange(steps[1]), np.arange(steps[2]))]
-    if ((steps[0] - 1) * voxel_size + vox_min[0] - vox_max[0]) > 0:
-        vox_min[0] -= ((steps[0] - 1) * voxel_size + vox_min[0] - vox_max[0]) / 2
-    if ((steps[1] - 1) * voxel_size + vox_min[1] - vox_max[1]) > 0:
-        vox_min[1] -= ((steps[1] - 1) * voxel_size + vox_min[1] - vox_max[1]) / 2
-    if ((steps[2] - 1) * voxel_size + vox_min[2] - vox_max[2]) > 0:
-        vox_min[2] -= ((steps[2] - 1) * voxel_size + vox_min[2] - vox_max[2]) / 2
+    steps = ((vox_max - vox_min) / voxel_size).round().astype('int64') + 1
+    x, y, z = [c.reshape(-1).astype('float32') for c in
+               np.meshgrid(np.arange(steps[0]), np.arange(steps[1]), np.arange(steps[2]))]
     x, y, z = x * voxel_size + vox_min[0], y * voxel_size + vox_min[1], z * voxel_size + vox_min[2]
 
     return np.stack([x, y, z]).T.astype('float32')
 
 
+def bbox2voxel(bbox):
+    # bbox to single voxels
+    vox_min, vox_max = bbox[:3], bbox[3:]
+    o3d_bbox = o3d.geometry.AxisAlignedBoundingBox(vox_min, vox_min)
+    return np.asarray(o3d_bbox.get_box_points())

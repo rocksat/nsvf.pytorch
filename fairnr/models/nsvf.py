@@ -27,7 +27,8 @@ from fairnr.models.nerf import NeRFModel
 class NSVFModel(NeRFModel):
 
     READER = 'image_reader'
-    ENCODER = 'sparsevoxel_encoder'
+    # ENCODER = 'sparsevoxel_encoder'
+    ENCODER = 'local_image_encoder'
     FIELD = 'radiance_field'
     RAYMARCHER = 'volume_rendering'
 
