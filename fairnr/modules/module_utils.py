@@ -24,7 +24,50 @@ def Embedding(num_embeddings, embedding_dim, padding_idx=None):
     m = nn.Embedding(num_embeddings, embedding_dim, padding_idx=padding_idx)
     nn.init.normal_(m.weight, mean=0, std=embedding_dim ** -0.5)
     return m
-    
+
+
+class SimpleMLP(nn.Module):
+    """
+    Simple 3-layer MLP for view aggregation
+    """
+    def __init__(self, in_dim, hid_dim=10):
+        super(SimpleMLP, self).__init__()
+        self.linear1 = torch.nn.Linear(in_dim, hid_dim)
+        self.linear2 = torch.nn.Linear(hid_dim, in_dim)
+
+    @torch.enable_grad()
+    def forward(self, x):
+        h_relu = self.linear1(x).clamp(min=0)
+        y_pred = self.linear2(h_relu)
+        return y_pred
+
+
+class AttSetsBatch(nn.Module):
+    """
+    Simple implementation of paper
+    "Robust Attentional Aggregation of Deep Feature Sets for Multi-view 3D Reconstruction", IJCV 2019
+    https://arxiv.org/pdf/1808.00758.pdf
+    """
+    def __init__(self, dim_in, dim_hidden=64):
+        super(AttSetsBatch, self).__init__()
+        self.net = nn.Sequential(
+            nn.Linear(dim_in, dim_hidden),
+            nn.ReLU(),
+            nn.Linear(dim_hidden, dim_in),
+            nn.ReLU(),
+            nn.Softmax(dim=0)
+        )
+
+    @torch.enable_grad()
+    def forward(self, x):
+        """
+        param x: torch.Size([Nviews, Nsamples, K])
+        return y: torch.Size([Nsamples, K])
+        """
+        h = torch.mul(self.net(x), x)  # [Nviews, Nsamples, K]
+        y = h.sum(dim=0)  # [Nsamples, K]
+        return y
+
 
 class PosEmbLinear(nn.Module):
 

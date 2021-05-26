@@ -85,8 +85,37 @@ def uv2cam(uv, z, intrinsics, homogeneous=False):
         return stack([x_lift, y_lift, z_lift])
 
 
+def cam2uv(cam_xyz, intrinsics, homogeneous=False):
+    fx, fy, cx, cy = parse_intrinsics(intrinsics)
+    x, y, z = cam_xyz[:, 0], cam_xyz[:, 1], cam_xyz[:, 2]
+    u = (x * fx) / z + cx
+    v = (y * fy) / z + cy
+
+    if homogeneous:
+        cam_uv = stack([u, v, ones_like(u)])
+    else:
+        cam_uv = stack([u, v, ])
+    return cam_uv.T
+
+
 def cam2world(xyz_cam, inv_RT):
     return matmul(inv_RT, xyz_cam)[:3]
+
+
+def world2cam(xyz_world, inv_RT):
+    if isinstance(xyz_world, torch.Tensor):
+        ones = torch.ones((xyz_world.shape[0], 1), device=xyz_world.device)
+    else:
+        ones = np.ones((xyz_world.shape[0], 1))
+    xyz_world_homo = cat([xyz_world, ones], axis=1)
+    xyz_cam_T = matmul(torch.inverse(inv_RT), xyz_world_homo.T).T
+    return xyz_cam_T[:, : 3]
+
+
+def get_ray_location_uv(sampled_xyz, intrinsics, inv_RT):
+    cam_xyz = world2cam(sampled_xyz, inv_RT)
+    sampled_uv = cam2uv(cam_xyz, intrinsics)
+    return sampled_uv
 
 
 def r6d2mat(d6: torch.Tensor) -> torch.Tensor:
