@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributed as dist
+import torchvision
 
 import numpy as np
 import open3d as o3d
@@ -14,13 +15,15 @@ import math
 import sys
 import os
 import math
+import imageio
 import logging
 logger = logging.getLogger(__name__)
 
 from pathlib import Path
 from plyfile import PlyData, PlyElement
 
-from fairnr.data.data_utils import load_matrix
+from fairnr.data.shape_dataset import ShapeViewDataset
+from fairnr.data.data_utils import load_matrix, load_rgb, parse_views
 from fairnr.data.geometry import (
     trilinear_interp, splitting_points, offset_points,
     get_edge, build_easy_octree, discretize_points, get_ray_location_uv
@@ -726,18 +729,86 @@ class LocalImageSparseVoxelEncoder(SparseVoxelEncoder):
         self.resolution = [int(r) for r in self.args.view_resolution.split('x')]
         self.C, self.H, self.W = 3, self.resolution[0], self.resolution[1]
         self.view_aggr = 'attsets'
-        self.backbone = 'resnet34_64d'
+        self.backbone = 'resnet34'
         self.freeze_weights = True
-        self.image_feature_path = None
+        self.device = 'cpu' if self.args.cpu else 'cuda'
+        self.feature_dict = self.extract_image_features()
 
-    def extract_image_feature(self, path, backbone):
-        pass
+    def load_dataset(self):
+        train_view = parse_views(self.args.train_views)
+        train_dataset = ShapeViewDataset(paths=self.args.data, views=train_view, num_view=self.args.view_per_batch,
+                                         resolution=self.args.view_resolution, preload=False)
+        N, C, H, W = len(train_dataset.views), 3, train_dataset.resolution[0], train_dataset.resolution[1]
+        colors = torch.zeros((N, C, H, W), dtype=torch.float)
+        extrinsics = torch.zeros((N, 4, 4), dtype=torch.float)
 
-    @torch.no_grad()
-    def preload_image_feature(self, path, backbone):
-        features = torch.load("{}/{}/features.pt".format(path, backbone))
-        cameras = torch.load("{}/{}/cameras.pt".format(path, backbone))
-        return features, cameras
+        for iview, (fn_rgb, fn_ext) in enumerate(zip(train_dataset.data[0]['rgb'], train_dataset.data[0]['ext'])):
+            colors[iview, :, :, :] = torch.from_numpy(load_rgb(fn_rgb, resolution=(H, W), with_alpha=False)[0][:C, :, :])
+            extrinsics[iview, :, :] = torch.from_numpy(load_matrix(fn_ext)).reshape(4, 4)
+        intrinsics = load_matrix(train_dataset.data[0]['ixt'])
+
+        # resize intrinsics
+        img = imageio.imread(train_dataset.data[0]['rgb'][0])[:, :, :3]
+        ori_H, ori_W, _ = img.shape
+        resized_intrinsics = np.identity(4)
+        resized_intrinsics[0, :] = intrinsics[0, :] * (W / ori_W)
+        resized_intrinsics[1, :] = intrinsics[1, :] * (H / ori_H)
+
+        return colors, extrinsics, torch.from_numpy(resized_intrinsics)
+
+    @staticmethod
+    def extract_resnet34_features(colors):
+        resnet34 = torchvision.models.resnet.resnet34(pretrained=True)
+        resnet34.fc = nn.Sequential()
+        resnet34.avgpool = nn.Sequential()
+
+        x = resnet34.conv1(colors)
+        x = resnet34.bn1(x)
+        x = resnet34.relu(x)
+        latents = [x]
+
+        latent_sz = latents[0].shape[-2:]
+        for i in range(len(latents)):
+            latents[i] = torch.nn.functional.interpolate(
+                latents[i],
+                latent_sz,
+                mode="bilinear",  # self.upsample_interp
+                align_corners=False
+            )
+        features = torch.cat(latents, dim=1)
+        return features
+
+    @staticmethod
+    def extract_vgg16_features(colors, num_layers=3):
+        vgg16 = torchvision.models.vgg.vgg16(pretrained=True)
+        features_HxW = vgg16.features[:num_layers](colors)  # [N, 64, H, W]
+        upsampler = torch.nn.Upsample(scale_factor=0.5, mode='bilinear', align_corners=False)
+        features = upsampler(features_HxW)
+        return features
+
+    def extract_image_features(self):
+        save_path = os.path.join(self.args.data, 'feature', '{}.pt'.format(self.backbone))
+        if not os.path.exists(save_path):
+            colors, extrinsics, intrinsics = self.load_dataset()
+            if self.backbone == 'resnet34':
+                features = self.extract_resnet34_features(colors)
+            elif self.backbone == 'vgg16':
+                features = self.extract_vgg16_features(colors)
+            else:
+                raise ValueError('unknown network backbone type')
+            # save to local
+            features_dict = {
+                'features': features,
+                'extrinsics': extrinsics,
+                'intrinsics': intrinsics
+            }
+            if not os.path.exists(os.path.dirname(save_path)):
+                os.makedirs(os.path.dirname(save_path))
+            torch.save(features_dict, save_path)
+        else:
+            # load precompute
+            features_dict = torch.load(save_path)
+        return features_dict
 
     @torch.no_grad()
     def index_features(self, features, uv):
@@ -748,9 +819,9 @@ class LocalImageSparseVoxelEncoder(SparseVoxelEncoder):
         """
         twos = torch.tensor([2.0, 2.0], dtype=torch.float32)
         image_size = torch.tensor([self.W, self.H])
-        sample_grid = torch.div(twos, image_size) * uv - 1.0
+        sample_grid = torch.div(twos, image_size).to(self.device) * uv - 1.0
         sample_grid = sample_grid.unsqueeze(2)  # (Nviews, Nsamples, 1, 2)
-        samples = F.grid_sample(features, sample_grid, mode="bilinear", padding_mode="border")
+        samples = F.grid_sample(features, sample_grid, mode="bilinear", padding_mode="border", align_corners=False)
         return samples[:, :, :, 0]  # (Nviews, K, Nsamples)
 
     @torch.enable_grad()
@@ -765,22 +836,20 @@ class LocalImageSparseVoxelEncoder(SparseVoxelEncoder):
         sampled_xyz = samples['sampled_point_xyz'].requires_grad_(True)  # [Nsamples, 3]
         sampled_dir = samples['sampled_point_ray_direction']
         sampled_dis = samples['sampled_point_distance']
-        Nsamples = sampled_xyz.size()[0]
+        features = self.feature_dict['features'].to(self.device)
+        extrinsics = self.feature_dict['extrinsics'].to(self.device)
+        intrinsics = self.feature_dict['intrinsics'].to(self.device)
+        feat_size = features.shape[1]
 
         # =========== Prepare inputs for implicit field ===========
         inputs = {'pos': sampled_xyz, 'ray': sampled_dir, 'dists': sampled_dis}
 
         # =========== Prepare features for implicit field ===========
         # sampled xyz projected to (u,v) in all views, [Nviews, Nsamples, 2]
-        features, cameras = self.preload_image_features()
-        sv_sampled_uvs = torch.zeros([self.Nviews, Nsamples, 2], dtype=torch.float32, device=self.device)
-
-        for iv in range(0, self.Nviews):
-            sv_sampled_uvs[iv, :, :] = get_ray_location_uv(
-                sampled_xyz, cameras['intrinsics'], cameras['extrinsics'][iv, :, :])
+        sampled_uv = torch.stack([get_ray_location_uv(sampled_xyz, intrinsics, ext) for ext in extrinsics])
 
         # Single view features: torch.Size([Nviews, Nsamples, K])
-        sv_feats = self.index_features(features, sv_sampled_uvs)
+        sv_feats = self.index_features(features, sampled_uv)
         sv_feats = sv_feats.transpose(1, 2)
 
         if self.freeze_weights:
@@ -790,11 +859,11 @@ class LocalImageSparseVoxelEncoder(SparseVoxelEncoder):
         if self.view_aggr == "avgpool":
             view_aggr_feats = torch.mean(sv_feats, dim=0, keepdim=False)
         elif self.view_aggr == "mlp":
-            mlp = SimpleMLP(self.feat_size).to(device=self.device)
-            view_aggr_feats = mlp(sv_feats).to(device=self.device)
+            mlp = SimpleMLP(feat_size).to(self.device)
+            view_aggr_feats = mlp(sv_feats)
         elif self.view_aggr == "attsets":
-            attsets = AttSetsBatch(self.feat_size).to(device=self.device)
-            view_aggr_feats = attsets(sv_feats).to(device=self.device)
+            attsets = AttSetsBatch(feat_size).to(self.device)
+            view_aggr_feats = attsets(sv_feats)
         else:
             raise NotImplementedError("Please use 'avgpool'/'mlp'/'attsets'")
 
