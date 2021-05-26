@@ -24,11 +24,11 @@ function train() {
 cd nsvf.pytorch && python3 train.py ${DATASET} \
     --user-dir fairnr \
     --task single_object_rendering \
-    --train-views "0..90" \
+    --train-views "0..50" \
     --view-resolution $RES \
     --max-sentences 1 \
     --view-per-batch 1 \
-    --pixel-per-view 1024 \
+    --pixel-per-view 512 \
     --no-preload \
     --sampling-on-mask 1.0 \
     --no-sampling-at-reader \
