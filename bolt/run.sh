@@ -52,7 +52,7 @@ cd nsvf.pytorch && python3 train.py ${DATASET} \
     --criterion "srn_loss" \
     --num-workers 2 \
     --seed 2 \
-    --save-interval-updates 500 --max-update 100000 \
+    --save-interval-updates 250 --max-update 100000 \
     --virtual-epoch-steps 5000 --save-interval 1 \
     --half-voxel-size-at  "5000,25000,75000" \
     --reduce-step-size-at "5000,25000,75000" \
