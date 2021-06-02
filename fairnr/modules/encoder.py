@@ -732,7 +732,6 @@ class LocalImageSparseVoxelEncoder(SparseVoxelEncoder):
         self.backbone = 'resnet34'
         self.freeze_weights = True
         self.device = 'cpu' if self.args.cpu else 'cuda'
-        self.feature_dict = self.extract_image_features()
 
     def load_dataset(self):
         train_view = parse_views(self.args.train_views)
@@ -836,9 +835,10 @@ class LocalImageSparseVoxelEncoder(SparseVoxelEncoder):
         sampled_xyz = samples['sampled_point_xyz'].requires_grad_(True)  # [Nsamples, 3]
         sampled_dir = samples['sampled_point_ray_direction']
         sampled_dis = samples['sampled_point_distance']
-        features = self.feature_dict['features'].to(self.device)
-        extrinsics = self.feature_dict['extrinsics'].to(self.device)
-        intrinsics = self.feature_dict['intrinsics'].to(self.device)
+        feature_dict = self.extract_image_features()
+        features = feature_dict['features'].to(self.device)
+        extrinsics = feature_dict['extrinsics'].to(self.device)
+        intrinsics = feature_dict['intrinsics'].to(self.device)
         feat_size = features.shape[1]
 
         # =========== Prepare inputs for implicit field ===========
