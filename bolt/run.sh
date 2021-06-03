@@ -1,6 +1,6 @@
 DATA=${DATA}"_NSVF_format"
-RES="480x640"
-ARCH="nsvf_bg"
+RES="360x480"
+ARCH="nsvf_image"
 SUFFIX="v1"
 DATASET=/task_runtime/datasets
 SAVE=$BOLT_ARTIFACT_DIR/saved/${DATA}
@@ -39,7 +39,8 @@ cd nsvf.pytorch && python3 train.py ${DATASET} \
     --background-stop-gradient \
     --arch $ARCH \
     --initial-boundingbox ${DATASET}/bbox.txt \
-    --raymarching-stepsize-ratio 0.125 \
+    --voxel-size 0.2 \
+    --raymarching-stepsize 0.005 \
     --use-octree \
     --discrete-regularization \
     --color-weight 128.0 \
