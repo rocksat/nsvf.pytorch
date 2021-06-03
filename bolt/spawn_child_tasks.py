@@ -15,7 +15,7 @@ def main():
     config['resources']['memory_gb'] = 760.0
     config['resources']['num_cpus'] = 80
     config['resources']['num_gpus'] = 8
-
+    config.pop('cluster_options')
     # environment variables
     config['environment_variables'] = {
         'PYTHONPATH': '/task_runtime/ostools:$PYTHONPATH',
