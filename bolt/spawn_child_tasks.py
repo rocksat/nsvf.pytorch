@@ -8,7 +8,13 @@ def main():
     # update config file
     config['is_parent'] = False
     config['command'] = 'bash run.sh'
-    config['resources']['num_gpus'] = 4
+    config['resources']['cluster'] = 'apc_usuqo27'
+    config['resources']['group'] = 'hwt:is:ve:rtcv'
+    config['resources']['docker_image'] = 'docker.apple.com/ad-algo/base-devel-tensorflow-optimized:0.1.1'
+    config['resources']['disk_gb'] = 800.0
+    config['resources']['memory_gb'] = 760.0
+    config['resources']['num_cpus'] = 80
+    config['resources']['num_gpus'] = 8
 
     # environment variables
     config['environment_variables'] = {
