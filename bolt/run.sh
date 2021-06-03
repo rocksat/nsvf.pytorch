@@ -1,5 +1,5 @@
 DATA=${DATA}"_NSVF_format"
-RES="360x480"
+RES="480x640"
 ARCH="nsvf_image"
 SUFFIX="v1"
 DATASET=/task_runtime/datasets
@@ -24,7 +24,7 @@ function train() {
 cd nsvf.pytorch && python3 train.py ${DATASET} \
     --user-dir fairnr \
     --task single_object_rendering \
-    --train-views "0..50" \
+    --train-views "0..90" \
     --view-resolution $RES \
     --max-sentences 1 \
     --view-per-batch 1 \
@@ -39,7 +39,7 @@ cd nsvf.pytorch && python3 train.py ${DATASET} \
     --background-stop-gradient \
     --arch $ARCH \
     --initial-boundingbox ${DATASET}/bbox.txt \
-    --voxel-size 0.2 \
+    --voxel-size 0.02 \
     --raymarching-stepsize 0.005 \
     --use-octree \
     --discrete-regularization \
@@ -53,7 +53,7 @@ cd nsvf.pytorch && python3 train.py ${DATASET} \
     --criterion "srn_loss" \
     --num-workers 2 \
     --seed 2 \
-    --save-interval-updates 250 --max-update 100000 \
+    --save-interval-updates 500 --max-update 100000 \
     --virtual-epoch-steps 5000 --save-interval 1 \
     --half-voxel-size-at  "5000,25000,75000" \
     --reduce-step-size-at "5000,25000,75000" \

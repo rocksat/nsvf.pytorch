@@ -118,6 +118,28 @@ def get_ray_location_uv(sampled_xyz, intrinsics, inv_RT):
     return sampled_uv
 
 
+def get_ray_location_uv_batch(world_xyz, intrinsics, inv_RTs):
+    """
+    :param world_xyz: sampled points in world coordinate, [Nsamples, 3]
+    :param intrinsics: camera intrinsics, [4, 4]
+    :param inv_RTs: camera pose, [Nviews, 4, 4]
+    :return:
+    """
+    # world coordinate -> camera coordinate
+    ones = torch.ones((len(world_xyz), 1), device=world_xyz.device)
+    world_xyz_homo = cat([world_xyz, ones], axis=1)
+    camera_xyz_T = matmul(torch.inverse(inv_RTs), world_xyz_homo.T)
+    camera_xyz = torch.transpose(camera_xyz_T, 1, 2)
+
+    # camera coordinate -> image coordinate
+    fx, fy, cx, cy = parse_intrinsics(intrinsics)
+    x, y, z = camera_xyz[:, :, 0], camera_xyz[:, :, 1], camera_xyz[:, :, 2]
+    u = (x * fx) / z + cx
+    v = (y * fy) / z + cy
+    return torch.cat([torch.unsqueeze(u, dim=-1), torch.unsqueeze(v, dim=-1)], dim=-1)
+
+
+
 def r6d2mat(d6: torch.Tensor) -> torch.Tensor:
     """
     Converts 6D rotation representation by Zhou et al. [1] to rotation matrix

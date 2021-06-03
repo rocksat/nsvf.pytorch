@@ -8,6 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributed as dist
 import torchvision
+import time
 
 import numpy as np
 import open3d as o3d
@@ -26,7 +27,7 @@ from fairnr.data.shape_dataset import ShapeViewDataset
 from fairnr.data.data_utils import load_matrix, load_rgb, parse_views
 from fairnr.data.geometry import (
     trilinear_interp, splitting_points, offset_points,
-    get_edge, build_easy_octree, discretize_points, get_ray_location_uv
+    get_edge, build_easy_octree, discretize_points, get_ray_location_uv_batch
 )
 from fairnr.clib import (
     aabb_ray_intersect, triangle_ray_intersect, svo_ray_intersect,
@@ -731,6 +732,12 @@ class LocalImageSparseVoxelEncoder(SparseVoxelEncoder):
         self.backbone = 'resnet34'
         self.freeze_weights = True
         self.device = 'cpu' if self.args.cpu else 'cuda'
+        if self.view_aggr == "mlp":
+            self.view_aggr_fn = SimpleMLP(args.voxel_embed_dim).to(self.device)
+        elif self.view_aggr == "attsets":
+            self.view_aggr_fn = AttSetsBatch(args.voxel_embed_dim).to(self.device)
+        else:
+            raise NotImplementedError("Please use 'avgpool'/'mlp'/'attsets'")
 
     def load_dataset(self):
         train_view = parse_views(self.args.train_views)
@@ -805,7 +812,7 @@ class LocalImageSparseVoxelEncoder(SparseVoxelEncoder):
             torch.save(features_dict, save_path)
         else:
             # load precompute
-            features_dict = torch.load(save_path)
+            features_dict = torch.load(save_path, map_location=self.device)
         return features_dict
 
     @torch.no_grad()
@@ -835,37 +842,27 @@ class LocalImageSparseVoxelEncoder(SparseVoxelEncoder):
         sampled_dir = samples['sampled_point_ray_direction']
         sampled_dis = samples['sampled_point_distance']
         feature_dict = self.extract_image_features()
-        features = feature_dict['features'].to(self.device)
-        extrinsics = feature_dict['extrinsics'].to(self.device)
-        intrinsics = feature_dict['intrinsics'].to(self.device)
-        feat_size = features.shape[1]
+        features = feature_dict['features']
+        extrinsics = feature_dict['extrinsics']
+        intrinsics = feature_dict['intrinsics']
 
         # =========== Prepare inputs for implicit field ===========
         inputs = {'pos': sampled_xyz, 'ray': sampled_dir, 'dists': sampled_dis}
 
         # =========== Prepare features for implicit field ===========
         # sampled xyz projected to (u,v) in all views, [Nviews, Nsamples, 2]
-        sampled_uv = torch.stack([get_ray_location_uv(sampled_xyz, intrinsics, ext) for ext in extrinsics])
+        sampled_uv_batch = get_ray_location_uv_batch(sampled_xyz, intrinsics, extrinsics)
 
         # Single view features: torch.Size([Nviews, Nsamples, K])
-        sv_feats = self.index_features(features, sampled_uv)
+        sv_feats = self.index_features(features, sampled_uv_batch)
         sv_feats = sv_feats.transpose(1, 2)
 
         if self.freeze_weights:
             sv_feats = sv_feats.detach()
 
         # View aggregation: torch.Size([Nviews, Nsamples, K]) -> torch.Size([Nsamples, K])
-        if self.view_aggr == "avgpool":
-            view_aggr_feats = torch.mean(sv_feats, dim=0, keepdim=False)
-        elif self.view_aggr == "mlp":
-            mlp = SimpleMLP(feat_size).to(self.device)
-            view_aggr_feats = mlp(sv_feats)
-        elif self.view_aggr == "attsets":
-            attsets = AttSetsBatch(feat_size).to(self.device)
-            view_aggr_feats = attsets(sv_feats)
-        else:
-            raise NotImplementedError("Please use 'avgpool'/'mlp'/'attsets'")
-
+        view_aggr_feats = self.view_aggr_fn(sv_feats)
+        # view_aggr_feats = torch.mean(sv_feats, dim=0, keepdim=False)
         inputs.update({'emb': view_aggr_feats})
         return inputs
 
