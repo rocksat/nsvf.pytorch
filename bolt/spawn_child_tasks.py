@@ -19,6 +19,7 @@ def main():
     # environment variables
     config['environment_variables'] = {
         'PYTHONPATH': '/task_runtime/ostools:$PYTHONPATH',
+        'PATH': '/usr/local/cuda-10.1/bin:$PATH',
     }
 
     for video in all_videos:
