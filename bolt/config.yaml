@@ -1,0 +1,32 @@
+name: NSVF Training
+
+setup_command: bash setup.sh
+command: bash run_multi.sh
+
+environment_variables:
+  PYTHONPATH: /task_runtime/ostools:$PYTHONPATH
+  PATH: /usr/local/cuda-10.1/bin:$PATH
+
+project_id: ravioli
+
+resources:
+  cluster: apc_usuqo27
+  group: hwt:is:ve:rtcv
+  docker_image: docker.apple.com/ad-algo/base-devel-tensorflow-optimized:0.1.1
+  disk_gb: 800.0
+  memory_gb: 760.0
+  num_cpus: 80
+  num_gpus: 8
+  ports:
+  - TENSORBOARD_PORT
+  - NOTEBOOK_PORT
+  timeout: 14d
+
+permissions:
+  owners: 'chuang5'
+  viewers: 'vejasper-dev'
+
+is_parent: false
+priority: 1
+
+tags: [8gpu, 80cpu]

@@ -1,9 +1,8 @@
-DATA=${DATA}"_NSVF_format"
 RES="480x640"
-ARCH="nsvf_image"
+ARCH="multi_nsvf_base"
 SUFFIX="v1"
-DATASET=/task_runtime/datasets
-SAVE=$BOLT_ARTIFACT_DIR/saved/${DATA}
+DATASET=/mnt/task_runtime/datasets
+SAVE=$BOLT_ARTIFACT_DIR/saved/
 MODEL=$ARCH$SUFFIX
 MODEL_PATH=$SAVE/$MODEL/checkpoint_last.pt
 
@@ -15,15 +14,21 @@ function makedir() {
 function download() {
   BLOBBY="aws --endpoint-url https://blob.mr3.simcloud.apple.com"
   S3_SRC="s3://chbucket/nsvf"
-  ${BLOBBY} s3 cp ${S3_SRC}/${DATA}.tar.gz .
-  tar -zxf ${DATA}.tar.gz -C ${DATASET}
-  DATASET=${DATASET}/${DATA}
+
+  for DATA in `cat europa.txt`
+  do
+    ${BLOBBY} s3 cp ${S3_SRC}/${DATA}_NSVF_format.tar.gz .
+    tar -zxf ${DATA}_NSVF_format.tar.gz -C ${DATASET}
+    rm ${DATA}_NSVF_format.tar.gz
+  done
 }
 
 function train() {
-cd nsvf.pytorch && python3 train.py ${DATASET} \
+cd nsvf.pytorch && CUDA_VISIBLE_DEVICES=0 python3 train.py ${DATASET} \
     --user-dir fairnr \
     --task single_object_rendering \
+    --object-id-file "/mnt/task_runtime/europa.txt" \
+    --min-color 0 \
     --train-views "0..90" \
     --view-resolution $RES \
     --max-sentences 1 \
@@ -38,7 +43,6 @@ cd nsvf.pytorch && python3 train.py ${DATASET} \
     --transparent-background "0.0,0.0,0.0" \
     --background-stop-gradient \
     --arch $ARCH \
-    --initial-boundingbox ${DATASET}/bbox.txt \
     --voxel-size 0.02 \
     --raymarching-stepsize 0.005 \
     --use-octree \
@@ -55,13 +59,11 @@ cd nsvf.pytorch && python3 train.py ${DATASET} \
     --seed 2 \
     --save-interval-updates 500 --max-update 100000 \
     --virtual-epoch-steps 5000 --save-interval 1 \
-    --half-voxel-size-at  "5000,25000,75000" \
-    --reduce-step-size-at "5000,25000,75000" \
-    --pruning-every-steps 2500 \
     --keep-interval-updates 5 \
     --log-format simple --log-interval 1 \
     --tensorboard-logdir ${SAVE}/tensorboard/${MODEL} \
-    --save-dir ${SAVE}/${MODEL}
+    --save-dir ${SAVE}/${MODEL} \
+    | tee $SAVE/train.log
 }
 
 function render() {
