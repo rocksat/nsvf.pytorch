@@ -47,6 +47,8 @@ class SharedNSVFModel(MultiNSVFModel):
 
 @register_model_architecture('multi_nsvf', "multi_nsvf_base")
 def multi_base_architecture(args):
+    args.voxel_embed_dim = getattr(args, "voxel_embed_dim", 64)
+    args.inputs_to_density = getattr(args, "inputs_to_density", "emb:6:{}".format(args.voxel_embed_dim))
     base_architecture(args)
 
 

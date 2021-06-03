@@ -28,10 +28,10 @@ class ShapeDataset(FairseqDataset):
                 subsample_valid=-1,
                 ids=None):
         
-        if os.path.isdir(paths):
+        if isinstance(paths, str) and os.path.isdir(paths):
             self.paths = [paths]
         else:
-            self.paths = [line.strip() for line in open(paths)]
+            self.paths = paths
 
         self.subsample_valid = subsample_valid
         self.total_num_shape = len(self.paths)
@@ -154,8 +154,12 @@ class ShapeViewDataset(ShapeDataset):
                 bg_color="1,1,1",
                 min_color=-1,
                 ids=None):
-        
-        super().__init__(paths, False, repeat, subsample_valid, ids)
+
+        if ids is None:
+            super().__init__(paths, False, repeat, subsample_valid, ids)
+        else:
+            obj_paths = ["{}/{}".format(paths, oid) for oid in ids.keys()]
+            super().__init__(obj_paths, False, repeat, subsample_valid, ids)
 
         self.train = train
         self.load_depth = load_depth

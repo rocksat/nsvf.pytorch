@@ -732,10 +732,6 @@ class LocalImageSparseVoxelEncoder(SparseVoxelEncoder):
         self.backbone = 'resnet34'
         self.freeze_weights = True
         self.device = 'cpu' if self.args.cpu else 'cuda'
-        feature_dict = self.extract_image_features()
-        self.features = feature_dict['features']
-        self.extrinsics = feature_dict['extrinsics']
-        self.intrinsics = feature_dict['intrinsics']
         if self.view_aggr == "mlp":
             self.view_aggr_fn = SimpleMLP(args.voxel_embed_dim).to(self.device)
         elif self.view_aggr == "attsets":
@@ -743,9 +739,9 @@ class LocalImageSparseVoxelEncoder(SparseVoxelEncoder):
         else:
             raise NotImplementedError("Please use 'avgpool'/'mlp'/'attsets'")
 
-    def load_dataset(self):
+    def load_dataset(self, data_path):
         train_view = parse_views(self.args.train_views)
-        train_dataset = ShapeViewDataset(paths=self.args.data, views=train_view, num_view=self.args.view_per_batch,
+        train_dataset = ShapeViewDataset(paths=data_path, views=train_view, num_view=self.args.view_per_batch,
                                          resolution=self.args.view_resolution, preload=False)
         N, C, H, W = len(train_dataset.views), 3, train_dataset.resolution[0], train_dataset.resolution[1]
         colors = torch.zeros((N, C, H, W), dtype=torch.float)
@@ -796,9 +792,10 @@ class LocalImageSparseVoxelEncoder(SparseVoxelEncoder):
         return features
 
     def extract_image_features(self):
-        save_path = os.path.join(self.args.data, 'feature', '{}.pt'.format(self.backbone))
+        data_path = os.path.dirname(self.bbox_path)
+        save_path = os.path.join(data_path, 'feature', '{}.pt'.format(self.backbone))
         if not os.path.exists(save_path):
-            colors, extrinsics, intrinsics = self.load_dataset()
+            colors, extrinsics, intrinsics = self.load_dataset(data_path)
             if self.backbone == 'resnet34':
                 features = self.extract_resnet34_features(colors)
             elif self.backbone == 'vgg16':
@@ -845,16 +842,17 @@ class LocalImageSparseVoxelEncoder(SparseVoxelEncoder):
         sampled_xyz = samples['sampled_point_xyz'].requires_grad_(True)  # [Nsamples, 3]
         sampled_dir = samples['sampled_point_ray_direction']
         sampled_dis = samples['sampled_point_distance']
+        feature_dict = self.extract_image_features()
 
         # =========== Prepare inputs for implicit field ===========
         inputs = {'pos': sampled_xyz, 'ray': sampled_dir, 'dists': sampled_dis}
 
         # =========== Prepare features for implicit field ===========
         # sampled xyz projected to (u,v) in all views, [Nviews, Nsamples, 2]
-        sampled_uv_batch = get_ray_location_uv_batch(sampled_xyz, self.intrinsics, self.extrinsics)
+        sampled_uv_batch = get_ray_location_uv_batch(sampled_xyz, feature_dict['intrinsics'], feature_dict['extrinsics'])
 
         # Single view features: torch.Size([Nviews, Nsamples, K])
-        sv_feats = self.index_features(self.features, sampled_uv_batch)
+        sv_feats = self.index_features(feature_dict['features'], sampled_uv_batch)
         sv_feats = sv_feats.transpose(1, 2)
 
         if self.freeze_weights:
@@ -870,14 +868,15 @@ class LocalImageSparseVoxelEncoder(SparseVoxelEncoder):
 class MultiSparseVoxelEncoder(Encoder):
     def __init__(self, args):
         super().__init__(args)
-        try:
-            self.all_voxels = nn.ModuleList(
-                [SparseVoxelEncoder(args, vox.strip()) for vox in open(args.voxel_path).readlines()])
 
-        except TypeError:
-            bbox_path = getattr(args, "bbox_path", "/private/home/jgu/data/shapenet/disco_dataset/bunny_point.txt")
-            self.all_voxels = nn.ModuleList(
-                [SparseVoxelEncoder(args, None, g.strip() + '/bbox.txt') for g in open(bbox_path).readlines()])
+        if args.voxel_path is not None:
+            logger.info("Loading voxels from {}".format(args.voxel_path))
+        else:
+            data_path = getattr(args, "data", None)
+            obj_id = getattr(args, "object_id_path", None)
+            object_ids = [g.strip() for g in open(obj_id).readlines()]
+            bbox_paths = ["{}/{}/bbox.txt".format(data_path, oid) for oid in object_ids]
+            self.all_voxels = nn.ModuleList([LocalImageSparseVoxelEncoder(args, None, bpath) for bpath in bbox_paths])
 
         # properties
         self.deterministic_step = getattr(args, "deterministic_step", False)
