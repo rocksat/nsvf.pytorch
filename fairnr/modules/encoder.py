@@ -721,7 +721,6 @@ class LocalImageSparseVoxelEncoder(SparseVoxelEncoder):
     """
     2D pixel aligned image encoder
     """
-
     def __init__(self, args, voxel_path=None, bbox_path=None, shared_values=None):
         super().__init__(args, voxel_path, bbox_path, shared_values)
 
@@ -1217,10 +1216,3 @@ def bbox2voxels(bbox, voxel_size):
     x, y, z = x * voxel_size + vox_min[0], y * voxel_size + vox_min[1], z * voxel_size + vox_min[2]
 
     return np.stack([x, y, z]).T.astype('float32')
-
-
-def bbox2voxel(bbox):
-    # bbox to single voxels
-    vox_min, vox_max = bbox[:3], bbox[3:]
-    o3d_bbox = o3d.geometry.AxisAlignedBoundingBox(vox_min, vox_min)
-    return np.asarray(o3d_bbox.get_box_points())

@@ -28,7 +28,6 @@ class NSVFModel(NeRFModel):
 
     READER = 'image_reader'
     ENCODER = 'sparsevoxel_encoder'
-    # ENCODER = 'local_image_encoder'
     FIELD = 'radiance_field'
     RAYMARCHER = 'volume_rendering'
 
@@ -328,3 +327,16 @@ class SDFSFXNSVFModel(SDFNSVFModel):
 @register_model_architecture("sdf_nsvf_sfx", "sdf_nsvf_sfx")
 def sdf_nsvfsfx_architecture(args):
     sdf_nsvf_architecture(args)
+
+
+@register_model('nsvf_image')
+class NSVFImageModel(NSVFModel):
+
+    ENCODER = 'local_image_encoder'
+
+
+@register_model_architecture("nsvf_image", "nsvf_image")
+def nsvf_image_architecture(args):
+    args.voxel_embed_dim = getattr(args, "voxel_embed_dim", 64)
+    args.inputs_to_density = getattr(args, "inputs_to_density", "emb:6:{}".format(args.voxel_embed_dim))
+    base_architecture(args)
