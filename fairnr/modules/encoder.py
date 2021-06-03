@@ -732,6 +732,10 @@ class LocalImageSparseVoxelEncoder(SparseVoxelEncoder):
         self.backbone = 'resnet34'
         self.freeze_weights = True
         self.device = 'cpu' if self.args.cpu else 'cuda'
+        feature_dict = self.extract_image_features()
+        self.features = feature_dict['features']
+        self.extrinsics = feature_dict['extrinsics']
+        self.intrinsics = feature_dict['intrinsics']
         if self.view_aggr == "mlp":
             self.view_aggr_fn = SimpleMLP(args.voxel_embed_dim).to(self.device)
         elif self.view_aggr == "attsets":
@@ -803,9 +807,9 @@ class LocalImageSparseVoxelEncoder(SparseVoxelEncoder):
                 raise ValueError('unknown network backbone type')
             # save to local
             features_dict = {
-                'features': features,
-                'extrinsics': extrinsics,
-                'intrinsics': intrinsics
+                'features': features.to(self.device),
+                'extrinsics': extrinsics.to(self.device),
+                'intrinsics': intrinsics.to(self.device)
             }
             if not os.path.exists(os.path.dirname(save_path)):
                 os.makedirs(os.path.dirname(save_path))
@@ -841,20 +845,16 @@ class LocalImageSparseVoxelEncoder(SparseVoxelEncoder):
         sampled_xyz = samples['sampled_point_xyz'].requires_grad_(True)  # [Nsamples, 3]
         sampled_dir = samples['sampled_point_ray_direction']
         sampled_dis = samples['sampled_point_distance']
-        feature_dict = self.extract_image_features()
-        features = feature_dict['features']
-        extrinsics = feature_dict['extrinsics']
-        intrinsics = feature_dict['intrinsics']
 
         # =========== Prepare inputs for implicit field ===========
         inputs = {'pos': sampled_xyz, 'ray': sampled_dir, 'dists': sampled_dis}
 
         # =========== Prepare features for implicit field ===========
         # sampled xyz projected to (u,v) in all views, [Nviews, Nsamples, 2]
-        sampled_uv_batch = get_ray_location_uv_batch(sampled_xyz, intrinsics, extrinsics)
+        sampled_uv_batch = get_ray_location_uv_batch(sampled_xyz, self.intrinsics, self.extrinsics)
 
         # Single view features: torch.Size([Nviews, Nsamples, K])
-        sv_feats = self.index_features(features, sampled_uv_batch)
+        sv_feats = self.index_features(self.features, sampled_uv_batch)
         sv_feats = sv_feats.transpose(1, 2)
 
         if self.freeze_weights:
@@ -862,7 +862,6 @@ class LocalImageSparseVoxelEncoder(SparseVoxelEncoder):
 
         # View aggregation: torch.Size([Nviews, Nsamples, K]) -> torch.Size([Nsamples, K])
         view_aggr_feats = self.view_aggr_fn(sv_feats)
-        # view_aggr_feats = torch.mean(sv_feats, dim=0, keepdim=False)
         inputs.update({'emb': view_aggr_feats})
         return inputs
 
