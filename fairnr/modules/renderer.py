@@ -6,12 +6,19 @@
 import math
 from collections import defaultdict
 
+import os
+import imageio
+import numpy as np
 import torch
+import torchvision
 import torch.nn as nn
 import torch.nn.functional as F
 
 from fairnr.modules.module_utils import FCLayer
 from fairnr.data.geometry import ray
+from fairnr.data.shape_dataset import ShapeViewDataset
+from fairnr.data.data_utils import load_matrix, load_rgb, parse_views
+from fairnr.modules.encoder import LocalImageSparseVoxelEncoder, MultiSparseVoxelEncoder
 
 MAX_DEPTH = 10000.0
 RENDERER_REGISTRY = {}
@@ -58,6 +65,8 @@ class VolumeRenderer(Renderer):
         self.discrete_reg = getattr(args, "discrete_regularization", False)
         self.raymarching_tolerance = getattr(args, "raymarching_tolerance", 0.0)
         self.trace_normal = getattr(args, "trace_normal", False)
+        self.backbone = 'resnet34'
+        self.device = 'cpu' if self.args.cpu else 'cuda'
 
     @staticmethod
     def add_args(parser):
@@ -73,6 +82,85 @@ class VolumeRenderer(Renderer):
         parser.add_argument('--raymarching-tolerance', type=float, default=0)
 
         parser.add_argument('--trace-normal', action='store_true')
+
+    # load pre-trained model
+    def load_dataset(self, data_path):
+        train_view = parse_views(self.args.train_views)
+        train_dataset = ShapeViewDataset(paths=data_path, views=train_view, num_view=self.args.view_per_batch,
+                                         resolution=self.args.view_resolution, preload=False)
+        N, C, H, W = len(train_dataset.views), 3, train_dataset.resolution[0], train_dataset.resolution[1]
+        colors = torch.zeros((N, C, H, W), dtype=torch.float)
+        extrinsics = torch.zeros((N, 4, 4), dtype=torch.float)
+
+        for iview, (fn_rgb, fn_ext) in enumerate(zip(train_dataset.data[0]['rgb'], train_dataset.data[0]['ext'])):
+            colors[iview, :, :, :] = torch.from_numpy(
+                load_rgb(fn_rgb, resolution=(H, W), with_alpha=False)[0][:C, :, :])
+            extrinsics[iview, :, :] = torch.from_numpy(load_matrix(fn_ext)).reshape(4, 4)
+        intrinsics = load_matrix(train_dataset.data[0]['ixt'])
+
+        # resize intrinsics
+        img = imageio.imread(train_dataset.data[0]['rgb'][0])[:, :, :3]
+        ori_H, ori_W, _ = img.shape
+        resized_intrinsics = np.identity(4)
+        resized_intrinsics[0, :] = intrinsics[0, :] * (W / ori_W)
+        resized_intrinsics[1, :] = intrinsics[1, :] * (H / ori_H)
+
+        return colors, extrinsics, torch.from_numpy(resized_intrinsics)
+
+    @staticmethod
+    def extract_resnet34_features(colors):
+        resnet34 = torchvision.models.resnet.resnet34(pretrained=True)
+        resnet34.fc = nn.Sequential()
+        resnet34.avgpool = nn.Sequential()
+
+        x = resnet34.conv1(colors)
+        x = resnet34.bn1(x)
+        x = resnet34.relu(x)
+        latents = [x]
+
+        latent_sz = latents[0].shape[-2:]
+        for i in range(len(latents)):
+            latents[i] = torch.nn.functional.interpolate(
+                latents[i],
+                latent_sz,
+                mode="bilinear",  # self.upsample_interp
+                align_corners=False
+            )
+        features = torch.cat(latents, dim=1)
+        return features
+
+    @staticmethod
+    def extract_vgg16_features(colors, num_layers=3):
+        vgg16 = torchvision.models.vgg.vgg16(pretrained=True)
+        features_HxW = vgg16.features[:num_layers](colors)  # [N, 64, H, W]
+        upsampler = torch.nn.Upsample(scale_factor=0.5, mode='bilinear', align_corners=False)
+        features = upsampler(features_HxW)
+        return features
+
+    def extract_image_features(self, data_path):
+        save_path = os.path.join(data_path, 'feature', '{}.pt'.format(self.backbone))
+        if not os.path.exists(save_path):
+            colors, extrinsics, intrinsics = self.load_dataset(data_path)
+            if self.backbone == 'resnet34':
+                features = self.extract_resnet34_features(colors)
+            elif self.backbone == 'vgg16':
+                features = self.extract_vgg16_features(colors)
+            else:
+                raise ValueError('unknown network backbone type')
+            # save to local
+            features_dict = {
+                'features': features.to(self.device),
+                'extrinsics': extrinsics.to(self.device),
+                'intrinsics': intrinsics.to(self.device)
+            }
+            if not os.path.exists(os.path.dirname(save_path)):
+                os.makedirs(os.path.dirname(save_path))
+            torch.save(features_dict, save_path)
+        else:
+            # load precompute
+            features_dict = torch.load(save_path, map_location=self.device)
+        return features_dict
+
 
     def forward_once(
         self, input_fn, field_fn, ray_start, ray_dir, samples, encoder_states,
@@ -142,6 +230,8 @@ class VolumeRenderer(Renderer):
         sampled_depth = samples['sampled_point_depth']
         sampled_idx = samples['sampled_point_voxel_idx'].long()
         original_depth = samples.get('original_point_depth', None)
+        data_path = os.path.dirname(input_fn.args.initial_boundingbox)
+        image_features = self.extract_image_features(data_path)
 
         tolerance = self.raymarching_tolerance
         chunk_size = self.chunk_size if self.training else self.valid_chunk_size
@@ -161,7 +251,8 @@ class VolumeRenderer(Renderer):
                         ray_start, ray_dir,
                         {name: s[:, start_step: i]
                             for name, s in samples.items()},
-                        encoder_states,
+                        encoder_states=image_features if isinstance(
+                            input_fn, (LocalImageSparseVoxelEncoder, MultiSparseVoxelEncoder)) else encoder_states,
                         early_stop=early_stop,
                         output_types=output_types)
                 if _outputs is not None:
