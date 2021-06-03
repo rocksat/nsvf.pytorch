@@ -139,9 +139,6 @@ class VolumeRenderer(Renderer):
         if self.trace_normal:
             output_types += ['normal']
 
-        ## ===========Encoder & radiance field for BK field ========
-        bk_field_inputs = {'pos': ray_start, 'ray': ray_dir}
-        bk_field_outputs = bg_field_fn(bk_field_inputs, outputs=output_types)
         sampled_depth = samples['sampled_point_depth']
         sampled_idx = samples['sampled_point_voxel_idx'].long()
         original_depth = samples.get('original_point_depth', None)
@@ -199,6 +196,7 @@ class VolumeRenderer(Renderer):
             a = 1 - torch.exp(-free_energy.float())                             # probability of it is not empty here
             b = torch.exp(-torch.cumsum(shifted_free_energy.float(), dim=-1))   # probability of everything is empty up to now
             probs = (a * b).type_as(free_energy)                                # probability of the ray hits something here
+            results['transparency'] = b
         else:
             probs = outputs['sample_mask'].type_as(sampled_depth) / sampled_depth.size(-1)  # assuming a uniform distribution
 
@@ -209,7 +207,7 @@ class VolumeRenderer(Renderer):
         missed = 1 - probs.sum(-1)
 
         results.update({
-            'probs': probs, 'depths': depth, 'transparency_value': b,
+            'probs': probs, 'depths': depth,
             'max_depths': sampled_depth.masked_fill(hits.eq(0), -1).max(1).values,
             'min_depths': sampled_depth.min(1).values,
             'missed': missed, 'ae': accumulated_evaluations
@@ -233,15 +231,20 @@ class VolumeRenderer(Renderer):
             results['regz-term'] = outputs['feat_n2'][sampled_idx.ne(-1)]
 
         # === Add background color with object color ====
-        background_color_scale = torch.zeros_like(bk_field_outputs['texture'])
-        background_color_scale[:,0] = results['transparency_value'][:, -1]
-        background_color_scale[:,1] = results['transparency_value'][:, -1]
-        background_color_scale[:,2] = results['transparency_value'][:, -1]
-        results['colors'] += background_color_scale * bk_field_outputs['texture']
+        if bg_field_fn is not None:
+            assert 'transparency' in results
+            bg_color_scale = results['transparency'][:, [-1]]
 
-        # === Add background depth term ====
-        # assign all rays a term of background depth 
-        results['depths'] += results['transparency_value'][:, -1] * BG_DEPTH
+            # background color estimate
+            bg_fiend_inputs = {'pos': ray_start, 'ray': ray_dir}
+            bg_field_outputs = bg_field_fn(bg_fiend_inputs, outputs=['texture'])
+
+            # add colors background term
+            results['colors'] += bg_color_scale * bg_field_outputs['texture']
+
+            # add depth background term
+            results['depths'] += results['transparency'][:, -1] * field_fn.bg_color.depth
+
         return results
 
     def forward(self, input_fn, bg_field_fn, field_fn, ray_start, ray_dir, BG_DEPTH, samples, *args, **kwargs):

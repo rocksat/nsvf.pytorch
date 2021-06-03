@@ -50,6 +50,7 @@ class BaseModel(BaseFairseqModel):
         self.encoder = setups['encoder']
         self.field = setups['field']
         self.raymarcher = setups['raymarcher']
+        self.bg_field = None
 
         self.cache = None
         self._num_updates = 0
