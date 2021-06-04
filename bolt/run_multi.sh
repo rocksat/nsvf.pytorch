@@ -17,9 +17,9 @@ function download_europa() {
 
   for DATA in `cat europa.txt`
   do
-    ${BLOBBY} s3 cp ${S3_SRC}/${DATA}_NSVF_format.tar.gz .
-    tar -zxf ${DATA}_NSVF_format.tar.gz -C ${DATASET}
-    rm ${DATA}_NSVF_format.tar.gz
+    ${BLOBBY} s3 cp ${S3_SRC}/${DATA}.tar.gz .
+    tar -zxf ${DATA}.tar.gz -C ${DATASET}
+    rm ${DATA}.tar.gz
   done
   OBJ_ID_FILE="/mnt/task_runtime/europa.txt"
 }
@@ -42,18 +42,19 @@ cd nsvf.pytorch && CUDA_VISIBLE_DEVICES=0 python3 train.py ${DATASET} \
     --train-views "0..90" \
     --view-resolution $RES \
     --max-sentences 1 \
-    --view-per-batch 1 \
+    --view-per-batch 2 \
     --pixel-per-view 512 \
     --no-preload \
+    --load-mask \
     --sampling-on-mask 1.0 \
     --no-sampling-at-reader \
     --valid-view-resolution $RES \
     --valid-views "90..97" \
     --valid-view-per-batch 1 \
-    --transparent-background "0.0,0.0,0.0" \
+    --transparent-background "1.0,1.0,1.0" \
     --background-stop-gradient \
     --arch $ARCH \
-    --voxel-size 0.02 \
+    --voxel-size 0.2 \
     --raymarching-stepsize 0.005 \
     --use-octree \
     --discrete-regularization \
@@ -98,7 +99,7 @@ cd nsvf.pytorch && python3 render.py ${DATASET} \
 makedir
 
 # download datasets
-download_syn10
+download_europa
 
 # start training on bolt
 train

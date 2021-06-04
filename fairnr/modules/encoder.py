@@ -1123,9 +1123,18 @@ class TriangleMeshEncoder(SparseVoxelEncoder):
 
 def bbox2voxels(bbox, voxel_size):
     vox_min, vox_max = bbox[:3], bbox[3:]
-    steps = ((vox_max - vox_min) / voxel_size).round().astype('int64') + 1
-    x, y, z = [c.reshape(-1).astype('float32') for c in
-               np.meshgrid(np.arange(steps[0]), np.arange(steps[1]), np.arange(steps[2]))]
+    vox_min += voxel_size / 2
+    vox_max -= voxel_size / 2
+    #steps = ((vox_max - vox_min) / voxel_size).round().astype('int64') + 1
+    steps = np.ceil((vox_max - vox_min) / voxel_size).astype('int64') + 1
+    x, y, z = [c.reshape(-1).astype('float32')
+               for c in np.meshgrid(np.arange(steps[0]), np.arange(steps[1]), np.arange(steps[2]))]
+    if ((steps[0] - 1) * voxel_size + vox_min[0] - vox_max[0]) > 0:
+        vox_min[0] -= ((steps[0] - 1) * voxel_size + vox_min[0] - vox_max[0]) / 2
+    if ((steps[1] - 1) * voxel_size + vox_min[1] - vox_max[1]) > 0:
+        vox_min[1] -= ((steps[1] - 1) * voxel_size + vox_min[1] - vox_max[1]) / 2
+    if ((steps[2] - 1) * voxel_size + vox_min[2] - vox_max[2]) > 0:
+        vox_min[2] -= ((steps[2] - 1) * voxel_size + vox_min[2] - vox_max[2]) / 2
     x, y, z = x * voxel_size + vox_min[0], y * voxel_size + vox_min[1], z * voxel_size + vox_min[2]
 
     return np.stack([x, y, z]).T.astype('float32')
