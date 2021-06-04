@@ -230,7 +230,7 @@ class VolumeRenderer(Renderer):
         sampled_depth = samples['sampled_point_depth']
         sampled_idx = samples['sampled_point_voxel_idx'].long()
         original_depth = samples.get('original_point_depth', None)
-        data_path = os.path.dirname(input_fn.args.initial_boundingbox)
+        data_path = os.path.dirname(input_fn.all_voxels[input_fn.cid].bbox_path)
         image_features = self.extract_image_features(data_path)
 
         tolerance = self.raymarching_tolerance
