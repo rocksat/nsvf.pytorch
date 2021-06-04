@@ -11,7 +11,7 @@ function makedir() {
   mkdir -p ${DATASET}
 }
 
-function download() {
+function download_europa() {
   BLOBBY="aws --endpoint-url https://blob.mr3.simcloud.apple.com"
   S3_SRC="s3://chbucket/nsvf"
 
@@ -21,13 +21,23 @@ function download() {
     tar -zxf ${DATA}_NSVF_format.tar.gz -C ${DATASET}
     rm ${DATA}_NSVF_format.tar.gz
   done
+  OBJ_ID_FILE="/mnt/task_runtime/europa.txt"
+}
+
+function download_syn10() {
+  BLOBBY="aws --endpoint-url https://blob.mr3.simcloud.apple.com"
+  ${BLOBBY} s3 cp s3://yxw/data/image-nsvf/syn10/syn10.tar.gz .
+  tar -zxf syn10.tar.gz -C ${DATASET}
+  rm syn10.tar.gz
+  DATASET=${DATASET}/syn10/data
+  OBJ_ID_FILE=${DATASET}/train_ids.txt
 }
 
 function train() {
 cd nsvf.pytorch && CUDA_VISIBLE_DEVICES=0 python3 train.py ${DATASET} \
     --user-dir fairnr \
     --task single_object_rendering \
-    --object-id-file "/mnt/task_runtime/europa.txt" \
+    --object-id-file ${OBJ_ID_FILE} \
     --min-color 0 \
     --train-views "0..90" \
     --view-resolution $RES \
@@ -88,7 +98,7 @@ cd nsvf.pytorch && python3 render.py ${DATASET} \
 makedir
 
 # download datasets
-download
+download_syn10
 
 # start training on bolt
 train
