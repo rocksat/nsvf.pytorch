@@ -37,7 +37,7 @@ function train() {
 cd nsvf.pytorch && CUDA_VISIBLE_DEVICES=0 python3 train.py ${DATASET} \
     --user-dir fairnr \
     --task single_object_rendering \
-    --object-id-file ${OBJ_ID_FILE} \
+    --object-id-path ${OBJ_ID_FILE} \
     --min-color 0 \
     --train-views "0..90" \
     --view-resolution $RES \
@@ -54,11 +54,11 @@ cd nsvf.pytorch && CUDA_VISIBLE_DEVICES=0 python3 train.py ${DATASET} \
     --transparent-background "1.0,1.0,1.0" \
     --background-stop-gradient \
     --arch $ARCH \
-    --voxel-size 0.2 \
+    --voxel-size 0.1 \
     --raymarching-stepsize 0.005 \
     --use-octree \
     --discrete-regularization \
-    --color-weight 128.0 \
+    --color-weight 1.0 \
     --optimizer "adam" \
     --adam-betas "(0.9, 0.999)" \
     --lr-scheduler "polynomial_decay" \
