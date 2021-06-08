@@ -161,7 +161,10 @@ class BaseModel(BaseFairseqModel):
             ray_start, ray_dir = ray_start[hits], ray_dir[hits]
             encoder_states = {name: s.reshape(-1, s.size(-1)) if s is not None else None
                 for name, s in encoder_states.items()}
-            
+
+            # add root_dir to encoder
+            id = kwargs['id'].item()
+            encoder_states['root_dir'] = kwargs['root_dir'][id]
             samples, all_results = self.raymarching(               # ray-marching
                 ray_start, ray_dir, intersection_outputs, encoder_states)
             
