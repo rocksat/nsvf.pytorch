@@ -836,15 +836,14 @@ class SparseVoxelEncoder(LocalImageEncoder):
 class MultiSparseVoxelEncoder(Encoder):
     def __init__(self, args):
         super().__init__(args)
+        try:
+            self.all_voxels = nn.ModuleList(
+                [SparseVoxelEncoder(args, vox.strip()) for vox in open(args.voxel_path).readlines()])
 
-        if args.voxel_path is not None:
-            logger.info("Loading voxels from {}".format(args.voxel_path))
-        else:
-            data_path = getattr(args, "data", None)
-            obj_id = getattr(args, "object_id_path", None)
-            object_ids = [g.strip() for g in open(obj_id).readlines()]
-            bbox_paths = ["{}/{}/bbox.txt".format(data_path, oid) for oid in object_ids]
-            # self.all_voxels = nn.ModuleList([LocalImageSparseVoxelEncoder(args, None, bpath) for bpath in bbox_paths])
+        except TypeError:
+            bbox_path = getattr(args, "bbox_path", "/private/home/jgu/data/shapenet/disco_dataset/bunny_point.txt")
+            self.all_voxels = nn.ModuleList(
+                [SparseVoxelEncoder(args, None, g.strip() + '/bbox.txt') for g in open(bbox_path).readlines()])
 
         # properties
         self.deterministic_step = getattr(args, "deterministic_step", False)
@@ -863,7 +862,7 @@ class MultiSparseVoxelEncoder(Encoder):
         SparseVoxelEncoder.add_args(parser)
         parser.add_argument('--bbox-path', type=str, default=None)
         parser.add_argument('--global-embeddings', type=str, default=None,
-            help="""set global embeddings if provided in global.txt. We follow this format:
+                            help="""set global embeddings if provided in global.txt. We follow this format:
                 (N, D) or (K, N, D) if we have multi-dimensional global features. 
                 D is the global feature dimentions. 
                 N is the number of indices of this feature, 
@@ -918,7 +917,7 @@ class MultiSparseVoxelEncoder(Encoder):
     @torch.no_grad()
     def pruning(self, field_fn, th=0.5, train_stats=False):
         for id in range(len(self.all_voxels)):
-           self.all_voxels[id].pruning(field_fn, th, train_stats=train_stats)
+            self.all_voxels[id].pruning(field_fn, th, train_stats=train_stats)
 
     @torch.no_grad()
     def splitting(self):
