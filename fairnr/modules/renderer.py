@@ -18,7 +18,7 @@ from fairnr.modules.module_utils import FCLayer
 from fairnr.data.geometry import ray
 from fairnr.data.shape_dataset import ShapeViewDataset
 from fairnr.data.data_utils import load_matrix, load_rgb, parse_views
-from fairnr.modules.encoder import LocalImageSparseVoxelEncoder, MultiSparseVoxelEncoder
+from fairnr.modules.encoder import LocalImageEncoder
 
 MAX_DEPTH = 10000.0
 RENDERER_REGISTRY = {}
@@ -230,8 +230,10 @@ class VolumeRenderer(Renderer):
         sampled_depth = samples['sampled_point_depth']
         sampled_idx = samples['sampled_point_voxel_idx'].long()
         original_depth = samples.get('original_point_depth', None)
-        data_path = os.path.dirname(input_fn.all_voxels[input_fn.cid].bbox_path)
-        image_features = self.extract_image_features(data_path)
+        if type(input_fn) == LocalImageEncoder:
+            data_path = encoder_states['root_dir']
+            image_feature = self.extract_image_features(data_path)
+            encoder_states['image_feature'] = image_feature
 
         tolerance = self.raymarching_tolerance
         chunk_size = self.chunk_size if self.training else self.valid_chunk_size
@@ -251,8 +253,7 @@ class VolumeRenderer(Renderer):
                         ray_start, ray_dir,
                         {name: s[:, start_step: i]
                             for name, s in samples.items()},
-                        encoder_states=image_features if isinstance(
-                            input_fn, (LocalImageSparseVoxelEncoder, MultiSparseVoxelEncoder)) else encoder_states,
+                        encoder_states=encoder_states,
                         early_stop=early_stop,
                         output_types=output_types)
                 if _outputs is not None:
