@@ -202,8 +202,221 @@ class InfiniteVolumeEncoder(VolumeEncoder):
         return field_inputs
 
 
+@register_encoder('local_image_encoder')
+class LocalImageEncoder(Encoder):
+    """
+    2D pixel aligned image encoder
+    """
+    def __init__(self, args):
+        super().__init__(args)
+        self.device = 'cpu' if self.args.cpu else 'cuda'
+        voxel_size = 0.1 if getattr(args, "voxel_size", None) is None else args.voxel_size
+
+        # ray-marching step size
+        if getattr(args, "raymarching_stepsize_ratio", 0) > 0:
+            step_size = args.raymarching_stepsize_ratio * voxel_size
+        else:
+            step_size = args.raymarching_stepsize
+
+        self.register_buffer("voxel_size", torch.scalar_tensor(voxel_size))
+        self.register_buffer("step_size", torch.scalar_tensor(step_size))
+        self.register_buffer("max_hits", torch.scalar_tensor(args.max_hits))
+
+        # set-up other hyperparameters and initialize running time caches
+        self.num_voxels = 0
+        self.embed_dim = getattr(args, "voxel_embed_dim", None)
+        self.deterministic_step = getattr(args, "deterministic_step", False)
+        self.use_octree = getattr(args, "use_octree", False)
+        self.track_max_probs = getattr(args, "track_max_probs", False)
+
+        # ------------ Initialize Images ------------
+        self.resolution = [int(r) for r in self.args.view_resolution.split('x')]
+        self.C, self.H, self.W = 3, self.resolution[0], self.resolution[1]
+        self.view_aggr = 'attsets'
+        self.freeze_weights = True
+        if self.view_aggr == "mlp":
+            self.view_aggr_fn = SimpleMLP(args.voxel_embed_dim)
+        elif self.view_aggr == "attsets":
+            self.view_aggr_fn = AttSetsBatch(args.voxel_embed_dim)
+        else:
+            raise NotImplementedError("Please use 'avgpool'/'mlp'/'attsets'")
+
+    @staticmethod
+    def add_args(parser):
+        parser.add_argument('--voxel-size', type=float, metavar='D',
+                            help='voxel size of the input points (initial')
+        parser.add_argument('--voxel-embed-dim', type=int, metavar='N', help="embedding size")
+        parser.add_argument('--deterministic-step', action='store_true',
+                            help='if set, the model runs fixed stepsize, instead of sampling one')
+        parser.add_argument('--max-hits', type=int, metavar='N',
+                            help='due to restrictions we set a maximum number of hits')
+        parser.add_argument('--raymarching-stepsize', type=float, metavar='D',
+                            help='ray marching step size for sparse voxels')
+        parser.add_argument('--raymarching-stepsize-ratio', type=float, metavar='D',
+                            help='if the concrete step size is not given (=0), '
+                                 'we use the ratio to the voxel size as step size.')
+        parser.add_argument('--use-octree', action='store_true',
+                            help='if set, instead of looping over the voxels, we build an octree.')
+        parser.add_argument('--track-max-probs', action='store_true',
+                            help='if set, tracking the maximum probability in ray-marching.')
+        parser.add_argument('--scene-scale', type=float, default=1.0)
+
+    def precompute(self, id, bbox, *args, **kwargs):
+        assert id is not None
+
+        # load bbox
+        np_bbox = bbox.cpu().numpy()[id.item()]
+        np_voxel_size = self.voxel_size.cpu().numpy()
+        points = torch.from_numpy(bbox2voxels(np_bbox[:6], np_voxel_size))
+        half_voxel = np_voxel_size * .5
+        self.num_voxels = len(points)
+
+        # transform from voxel centers to voxel corners (key/values)
+        fine_coords, _ = discretize_points(points, half_voxel)
+        fine_keys0 = offset_points(fine_coords, 1.0).reshape(-1, 3)
+        keys, feats = torch.unique(fine_keys0, dim=0, sorted=True, return_inverse=True)
+        feats = feats.reshape(-1, 8)
+        num_keys = torch.scalar_tensor(keys.size(0)).long()
+
+        # extend size to support multi-objects
+        feats = feats.unsqueeze(0).expand(id.size(0), *feats.size()).contiguous().to(self.device)
+        points = points.unsqueeze(0).expand(id.size(0), *points.size()).contiguous().to(self.device)
+
+        # moving to multiple objects
+        if id.size(0) > 1:
+            feats = feats + num_keys * torch.arange(id.size(0), device=feats.device, dtype=feats.dtype)[:, None, None]
+
+        encoder_states = {
+            'voxel_vertex_idx': feats,
+            'voxel_center_xyz': points
+        }
+
+        if self.use_octree:
+            flatten_centers, flatten_children = build_easy_octree(points, self.voxel_size / 2.0)
+            flatten_centers = flatten_centers.unsqueeze(0).expand(id.size(0), *flatten_centers.size()).contiguous()
+            flatten_children = flatten_children.unsqueeze(0).expand(id.size(0), *flatten_children.size()).contiguous()
+            encoder_states['voxel_octree_center_xyz'] = flatten_centers
+            encoder_states['voxel_octree_children_idx'] = flatten_children
+        return encoder_states
+
+    def ray_intersect(self, ray_start, ray_dir, encoder_states):
+        point_feats = encoder_states['voxel_vertex_idx']
+        point_xyz = encoder_states['voxel_center_xyz']
+        S, V, P, _ = ray_dir.size()
+        _, H, D = point_feats.size()
+
+        # ray-voxel intersection
+        ray_start = ray_start.expand_as(ray_dir).contiguous().view(S, V * P, 3).contiguous()
+        ray_dir = ray_dir.reshape(S, V * P, 3).contiguous()
+
+        if self.use_octree:  # ray-voxel intersection with SVO
+            flatten_centers = encoder_states['voxel_octree_center_xyz']
+            flatten_children = encoder_states['voxel_octree_children_idx']
+            pts_idx, min_depth, max_depth = svo_ray_intersect(
+                self.voxel_size, self.max_hits, flatten_centers, flatten_children,
+                ray_start, ray_dir)
+        else:   # ray-voxel intersection with all voxels
+            pts_idx, min_depth, max_depth = aabb_ray_intersect(
+                self.voxel_size, self.max_hits, point_xyz, ray_start, ray_dir)
+
+        # sort the depths
+        min_depth.masked_fill_(pts_idx.eq(-1), MAX_DEPTH)
+        max_depth.masked_fill_(pts_idx.eq(-1), MAX_DEPTH)
+        min_depth, sorted_idx = min_depth.sort(dim=-1)
+        max_depth = max_depth.gather(-1, sorted_idx)
+        pts_idx = pts_idx.gather(-1, sorted_idx)
+        hits = pts_idx.ne(-1).any(-1)  # remove all points that completely miss the object
+
+        if S > 1:  # extend the point-index to multiple shapes (just in case)
+            pts_idx = (pts_idx + H * torch.arange(S,
+                device=pts_idx.device, dtype=pts_idx.dtype)[:, None, None]
+                ).masked_fill_(pts_idx.eq(-1), -1)
+
+        intersection_outputs = {
+            "min_depth": min_depth,
+            "max_depth": max_depth,
+            "intersected_voxel_idx": pts_idx
+        }
+        return ray_start, ray_dir, intersection_outputs, hits
+
+    def ray_sample(self, intersection_outputs):
+        # sample points and use middle point approximation
+        sampled_idx, sampled_depth, sampled_dists = inverse_cdf_sampling(
+            intersection_outputs['intersected_voxel_idx'],
+            intersection_outputs['min_depth'],
+            intersection_outputs['max_depth'],
+            intersection_outputs['probs'],
+            intersection_outputs['steps'],
+            -1, self.deterministic_step or (not self.training))
+        sampled_dists = sampled_dists.clamp(min=0.0)
+        sampled_depth.masked_fill_(sampled_idx.eq(-1), MAX_DEPTH)
+        sampled_dists.masked_fill_(sampled_idx.eq(-1), 0.0)
+
+        samples = {
+            'sampled_point_depth': sampled_depth,
+            'sampled_point_distance': sampled_dists,
+            'sampled_point_voxel_idx': sampled_idx,
+        }
+        return samples
+
+    def get_edge(self, ray_start, ray_dir, samples, encoder_states):
+        outs = get_edge(
+            ray_start + ray_dir * samples['sampled_point_depth'][:, :1],
+            encoder_states['voxel_center_xyz'].reshape(-1, 3)[samples['sampled_point_voxel_idx'][:, 0].long()],
+            self.voxel_size).type_as(ray_dir)   # get voxel edges/depth (for visualization)
+        outs = (1 - outs[:, None].expand(outs.size(0), 3)) * 0.7
+        return outs
+
+    @torch.no_grad()
+    def index_features(self, features, uv):
+        """
+        Get pixel-aligned image features at 2D image coordinates
+        :param uv (Nviews, Nsamples, 2) image points (x,y)
+        :return sampled features [Nviews, K, Nsamples], K is latent size
+        """
+        twos = torch.tensor([2.0, 2.0], dtype=torch.float32)
+        image_size = torch.tensor([self.W, self.H])
+        sample_grid = torch.div(twos, image_size).to(features.device) * uv - 1.0
+        sample_grid = sample_grid.unsqueeze(2)  # (Nviews, Nsamples, 1, 2)
+        samples = F.grid_sample(features, sample_grid, mode="bilinear", padding_mode="border", align_corners=False)
+        return samples[:, :, :, 0]  # (Nviews, K, Nsamples)
+
+    @torch.enable_grad()
+    def forward(self, samples, encoder_states):
+        """
+        For extracting ResNet's features.
+        :param x image in shape [Nviews, 3, H, W]
+        self.features size: torch.Size([Nviews, K, H/2, W/2]), feature volume
+        inputs['emb'].shape: torch.Size([Nsamples, K])
+        """
+        # =========== Get ray point samples ===========
+        sampled_xyz = samples['sampled_point_xyz'].requires_grad_(True)  # [Nsamples, 3]
+        sampled_dir = samples['sampled_point_ray_direction']
+        sampled_dis = samples['sampled_point_distance']
+        image_feature = encoder_states['image_feature']
+
+        # =========== Prepare inputs for implicit field ===========
+        inputs = {'pos': sampled_xyz, 'ray': sampled_dir, 'dists': sampled_dis}
+
+        # =========== Prepare features for implicit field ===========
+        # sampled xyz projected to (u,v) in all views, [Nviews, Nsamples, 2]
+        sampled_uv_batch = get_ray_location_uv_batch(sampled_xyz, image_feature['intrinsics'], image_feature['extrinsics'])
+
+        # Single view features: torch.Size([Nviews, Nsamples, K])
+        sv_feats = self.index_features(image_feature['features'], sampled_uv_batch)
+        sv_feats = sv_feats.transpose(1, 2)
+
+        if self.freeze_weights:
+            sv_feats = sv_feats.detach()
+
+        # View aggregation: torch.Size([Nviews, Nsamples, K]) -> torch.Size([Nsamples, K])
+        view_aggr_feats = self.view_aggr_fn(sv_feats)
+        inputs.update({'emb': view_aggr_feats})
+        return inputs
+
+
 @register_encoder('sparsevoxel_encoder')
-class SparseVoxelEncoder(Encoder):
+class SparseVoxelEncoder(LocalImageEncoder):
 
     def __init__(self, args, voxel_path=None, bbox_path=None, shared_values=None):
         super().__init__(args)
@@ -266,10 +479,9 @@ class SparseVoxelEncoder(Encoder):
         else:
             # read bounding-box file
             bbox = np.loadtxt(self.bbox_path)
-            voxel_size = bbox[-1] if getattr(args, "voxel_size", None) is None else args.voxel_size
-            fine_points = torch.from_numpy(bbox2voxels(bbox[:6], voxel_size))
+            fine_points = torch.from_numpy(bbox2voxels(bbox[:6], self.voxel_size.numpy()))
 
-        half_voxel = voxel_size * .5
+        half_voxel = self.voxel_size * .5
 
         # transform from voxel centers to voxel corners (key/values)
         fine_coords, _ = discretize_points(fine_points, half_voxel)
@@ -278,12 +490,6 @@ class SparseVoxelEncoder(Encoder):
         fine_feats = fine_feats.reshape(-1, 8)
         num_keys = torch.scalar_tensor(fine_keys.size(0)).long()
 
-        # ray-marching step size
-        if getattr(args, "raymarching_stepsize_ratio", 0) > 0:
-            step_size = args.raymarching_stepsize_ratio * voxel_size
-        else:
-            step_size = args.raymarching_stepsize
-
         # register parameters (will be saved to checkpoints)
         self.register_buffer("points", fine_points)          # voxel centers
         self.register_buffer("keys", fine_keys.long())       # id used to find voxel corners/embeddings
@@ -291,17 +497,7 @@ class SparseVoxelEncoder(Encoder):
         self.register_buffer("num_keys", num_keys)
         self.register_buffer("keep", fine_feats.new_ones(fine_feats.size(0)).long())  # whether the voxel will be pruned
 
-        self.register_buffer("voxel_size", torch.scalar_tensor(voxel_size))
-        self.register_buffer("step_size", torch.scalar_tensor(step_size))
-        self.register_buffer("max_hits", torch.scalar_tensor(args.max_hits))
-
         logger.info("loaded {} voxel centers, {} voxel corners".format(fine_points.size(0), num_keys))
-
-        # set-up other hyperparameters and initialize running time caches
-        self.embed_dim = getattr(args, "voxel_embed_dim", None)
-        self.deterministic_step = getattr(args, "deterministic_step", False)
-        self.use_octree = getattr(args, "use_octree", False)
-        self.track_max_probs = getattr(args, "track_max_probs", False)
         self._runtime_caches = {
             "flatten_centers": None,
             "flatten_children": None,
@@ -350,20 +546,9 @@ class SparseVoxelEncoder(Encoder):
 
     @staticmethod
     def add_args(parser):
+        LocalImageEncoder.add_args(parser)
         parser.add_argument('--initial-boundingbox', type=str, help='the initial bounding box to initialize the model')
-        parser.add_argument('--voxel-size', type=float, metavar='D', help='voxel size of the input points (initial')
         parser.add_argument('--voxel-path', type=str, help='path for pretrained voxel file. if provided no update')
-        parser.add_argument('--voxel-embed-dim', type=int, metavar='N', help="embedding size")
-        parser.add_argument('--deterministic-step', action='store_true',
-                            help='if set, the model runs fixed stepsize, instead of sampling one')
-        parser.add_argument('--max-hits', type=int, metavar='N', help='due to restrictions we set a maximum number of hits')
-        parser.add_argument('--raymarching-stepsize', type=float, metavar='D',
-                            help='ray marching step size for sparse voxels')
-        parser.add_argument('--raymarching-stepsize-ratio', type=float, metavar='D',
-                            help='if the concrete step size is not given (=0), we use the ratio to the voxel size as step size.')
-        parser.add_argument('--use-octree', action='store_true', help='if set, instead of looping over the voxels, we build an octree.')
-        parser.add_argument('--track-max-probs', action='store_true', help='if set, tracking the maximum probability in ray-marching.')
-        parser.add_argument('--scene-scale', type=float, default=1.0)
 
     def reset_runtime_caches(self):
         logger.info("reset chache")
@@ -489,74 +674,6 @@ class SparseVoxelEncoder(Encoder):
         verts = np.array([tuple(a) for a in verts.tolist()], dtype=[('x', 'f4'), ('y', 'f4'), ('z', 'f4')])
         faces = np.array([(a, ) for a in faces.tolist()], dtype=[('vertex_indices', 'i4', (3,))])
         return PlyData([PlyElement.describe(verts, 'vertex'), PlyElement.describe(faces, 'face')])
-
-    def get_edge(self, ray_start, ray_dir, samples, encoder_states):
-        outs = get_edge(
-            ray_start + ray_dir * samples['sampled_point_depth'][:, :1],
-            encoder_states['voxel_center_xyz'].reshape(-1, 3)[samples['sampled_point_voxel_idx'][:, 0].long()],
-            self.voxel_size).type_as(ray_dir)   # get voxel edges/depth (for visualization)
-        outs = (1 - outs[:, None].expand(outs.size(0), 3)) * 0.7
-        return outs
-
-    def ray_intersect(self, ray_start, ray_dir, encoder_states):
-        point_feats = encoder_states['voxel_vertex_idx']
-        point_xyz = encoder_states['voxel_center_xyz']
-        S, V, P, _ = ray_dir.size()
-        _, H, D = point_feats.size()
-
-        # ray-voxel intersection
-        ray_start = ray_start.expand_as(ray_dir).contiguous().view(S, V * P, 3).contiguous()
-        ray_dir = ray_dir.reshape(S, V * P, 3).contiguous()
-
-        if self.use_octree:  # ray-voxel intersection with SVO
-            flatten_centers = encoder_states['voxel_octree_center_xyz']
-            flatten_children = encoder_states['voxel_octree_children_idx']
-            pts_idx, min_depth, max_depth = svo_ray_intersect(
-                self.voxel_size, self.max_hits, flatten_centers, flatten_children,
-                ray_start, ray_dir)
-        else:   # ray-voxel intersection with all voxels
-            pts_idx, min_depth, max_depth = aabb_ray_intersect(
-                self.voxel_size, self.max_hits, point_xyz, ray_start, ray_dir)
-
-        # sort the depths
-        min_depth.masked_fill_(pts_idx.eq(-1), MAX_DEPTH)
-        max_depth.masked_fill_(pts_idx.eq(-1), MAX_DEPTH)
-        min_depth, sorted_idx = min_depth.sort(dim=-1)
-        max_depth = max_depth.gather(-1, sorted_idx)
-        pts_idx = pts_idx.gather(-1, sorted_idx)
-        hits = pts_idx.ne(-1).any(-1)  # remove all points that completely miss the object
-
-        if S > 1:  # extend the point-index to multiple shapes (just in case)
-            pts_idx = (pts_idx + H * torch.arange(S,
-                device=pts_idx.device, dtype=pts_idx.dtype)[:, None, None]
-                ).masked_fill_(pts_idx.eq(-1), -1)
-
-        intersection_outputs = {
-            "min_depth": min_depth,
-            "max_depth": max_depth,
-            "intersected_voxel_idx": pts_idx
-        }
-        return ray_start, ray_dir, intersection_outputs, hits
-
-    def ray_sample(self, intersection_outputs):
-        # sample points and use middle point approximation
-        sampled_idx, sampled_depth, sampled_dists = inverse_cdf_sampling(
-            intersection_outputs['intersected_voxel_idx'],
-            intersection_outputs['min_depth'],
-            intersection_outputs['max_depth'],
-            intersection_outputs['probs'],
-            intersection_outputs['steps'],
-            -1, self.deterministic_step or (not self.training))
-        sampled_dists = sampled_dists.clamp(min=0.0)
-        sampled_depth.masked_fill_(sampled_idx.eq(-1), MAX_DEPTH)
-        sampled_dists.masked_fill_(sampled_idx.eq(-1), 0.0)
-
-        samples = {
-            'sampled_point_depth': sampled_depth,
-            'sampled_point_distance': sampled_dists,
-            'sampled_point_voxel_idx': sampled_idx,
-        }
-        return samples
 
     @torch.enable_grad()
     def forward(self, samples, encoder_states):
@@ -715,73 +832,6 @@ class SparseVoxelEncoder(Encoder):
         return self.keep.long().sum()
 
 
-@register_encoder('local_image_encoder')
-class LocalImageSparseVoxelEncoder(SparseVoxelEncoder):
-    """
-    2D pixel aligned image encoder
-    """
-    def __init__(self, args, voxel_path=None, bbox_path=None, shared_values=None):
-        super().__init__(args, voxel_path, bbox_path, shared_values)
-
-        # ------------ Initialize Images ------------
-        self.resolution = [int(r) for r in self.args.view_resolution.split('x')]
-        self.C, self.H, self.W = 3, self.resolution[0], self.resolution[1]
-        self.view_aggr = 'attsets'
-        self.freeze_weights = True
-        if self.view_aggr == "mlp":
-            self.view_aggr_fn = SimpleMLP(args.voxel_embed_dim)
-        elif self.view_aggr == "attsets":
-            self.view_aggr_fn = AttSetsBatch(args.voxel_embed_dim)
-        else:
-            raise NotImplementedError("Please use 'avgpool'/'mlp'/'attsets'")
-
-    @torch.no_grad()
-    def index_features(self, features, uv):
-        """
-        Get pixel-aligned image features at 2D image coordinates
-        :param uv (Nviews, Nsamples, 2) image points (x,y)
-        :return sampled features [Nviews, K, Nsamples], K is latent size
-        """
-        twos = torch.tensor([2.0, 2.0], dtype=torch.float32)
-        image_size = torch.tensor([self.W, self.H])
-        sample_grid = torch.div(twos, image_size).to(features.device) * uv - 1.0
-        sample_grid = sample_grid.unsqueeze(2)  # (Nviews, Nsamples, 1, 2)
-        samples = F.grid_sample(features, sample_grid, mode="bilinear", padding_mode="border", align_corners=False)
-        return samples[:, :, :, 0]  # (Nviews, K, Nsamples)
-
-    @torch.enable_grad()
-    def forward(self, samples, image_features):
-        """
-        For extracting ResNet's features.
-        :param x image in shape [Nviews, 3, H, W]
-        self.features size: torch.Size([Nviews, K, H/2, W/2]), feature volume
-        inputs['emb'].shape: torch.Size([Nsamples, K])
-        """
-        # =========== Get ray point samples ===========
-        sampled_xyz = samples['sampled_point_xyz'].requires_grad_(True)  # [Nsamples, 3]
-        sampled_dir = samples['sampled_point_ray_direction']
-        sampled_dis = samples['sampled_point_distance']
-
-        # =========== Prepare inputs for implicit field ===========
-        inputs = {'pos': sampled_xyz, 'ray': sampled_dir, 'dists': sampled_dis}
-
-        # =========== Prepare features for implicit field ===========
-        # sampled xyz projected to (u,v) in all views, [Nviews, Nsamples, 2]
-        sampled_uv_batch = get_ray_location_uv_batch(sampled_xyz, image_features['intrinsics'], image_features['extrinsics'])
-
-        # Single view features: torch.Size([Nviews, Nsamples, K])
-        sv_feats = self.index_features(image_features['features'], sampled_uv_batch)
-        sv_feats = sv_feats.transpose(1, 2)
-
-        if self.freeze_weights:
-            sv_feats = sv_feats.detach()
-
-        # View aggregation: torch.Size([Nviews, Nsamples, K]) -> torch.Size([Nsamples, K])
-        view_aggr_feats = self.view_aggr_fn(sv_feats)
-        inputs.update({'emb': view_aggr_feats})
-        return inputs
-
-
 @register_encoder('multi_sparsevoxel_encoder')
 class MultiSparseVoxelEncoder(Encoder):
     def __init__(self, args):
@@ -794,7 +844,7 @@ class MultiSparseVoxelEncoder(Encoder):
             obj_id = getattr(args, "object_id_path", None)
             object_ids = [g.strip() for g in open(obj_id).readlines()]
             bbox_paths = ["{}/{}/bbox.txt".format(data_path, oid) for oid in object_ids]
-            self.all_voxels = nn.ModuleList([LocalImageSparseVoxelEncoder(args, None, bpath) for bpath in bbox_paths])
+            # self.all_voxels = nn.ModuleList([LocalImageSparseVoxelEncoder(args, None, bpath) for bpath in bbox_paths])
 
         # properties
         self.deterministic_step = getattr(args, "deterministic_step", False)
