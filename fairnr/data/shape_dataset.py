@@ -41,12 +41,16 @@ class ShapeDataset(FairseqDataset):
         # -- load per-shape data
         _data_per_shape = {}
         _data_per_shape['shape'] = list(range(len(self.paths)))
+        _data_per_shape['path'] = self.paths
         _ixts = self.find_intrinsics()
         _glbs = self.find_global()
+        _boxs = self.find_bbox()
         if len(_ixts) > 0:
             _data_per_shape['ixt'] = _ixts
         if len(_glbs) > 0:
             _data_per_shape['glb'] = _glbs
+        if len(_boxs) > 0:
+            _data_per_shape['box'] = _boxs
 
         if self.subsample_valid > -1:
             for key in _data_per_shape:
@@ -90,13 +94,23 @@ class ShapeDataset(FairseqDataset):
                 glb_list.append(path + '/global.txt')
         return glb_list
 
+    def find_bbox(self):
+        bbox_list = []
+        for path in self.paths:
+            if os.path.exists(path + '/bbox.txt'):
+                bbox_list.append(path + '/bbox.txt')
+        return bbox_list
+
     def _load_shape(self, packed_data):  
         intrinsics = data_utils.load_intrinsics(packed_data['ixt']).astype('float32') \
             if packed_data.get('ixt', None) is not None else None
         shape_id = packed_data['shape']
-        shape_data = {'intrinsics': intrinsics, 'id': shape_id}
+        root_dir = packed_data['path']
+        shape_data = {'intrinsics': intrinsics, 'id': shape_id, 'root_dir': root_dir}
         if packed_data.get('glb', None) is not None:   # additional global feature (if any)
            shape_data['global_index'] = np.loadtxt(packed_data['glb']).astype('int64')
+        if packed_data.get('box', None) is not None:   # additional bbox
+            shape_data['bbox'] = np.loadtxt(packed_data['box'])
         return shape_data
 
     def _load_batch(self, data, index):
@@ -119,7 +133,9 @@ class ShapeDataset(FairseqDataset):
 
         results['shape'] = torch.from_numpy(np.array([s[0] for s in samples]))    
         for key in samples[0][1]:
-            if samples[0][1][key] is not None:
+            if key == 'root_dir':
+                results[key] = [s[1][key] for s in samples]
+            elif samples[0][1][key] is not None:
                 results[key] = torch.from_numpy(
                     np.array([s[1][key] for s in samples]))
             else:
