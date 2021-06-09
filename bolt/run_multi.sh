@@ -1,5 +1,5 @@
 RES="480x640"
-ARCH="multi_nsvf_base"
+ARCH="nsvf_image"
 SUFFIX="v1"
 DATASET=/mnt/task_runtime/datasets
 SAVE=$BOLT_ARTIFACT_DIR/saved/
@@ -56,7 +56,6 @@ cd nsvf.pytorch && CUDA_VISIBLE_DEVICES=0 python3 train.py ${DATASET} \
     --arch $ARCH \
     --voxel-size 0.1 \
     --raymarching-stepsize 0.005 \
-    --use-octree \
     --discrete-regularization \
     --color-weight 1.0 \
     --optimizer "adam" \

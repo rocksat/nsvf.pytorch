@@ -224,9 +224,9 @@ class LocalImageEncoder(Encoder):
 
         # set-up other hyperparameters and initialize running time caches
         self.num_voxels = 0
+        self.use_octree = False
         self.embed_dim = getattr(args, "voxel_embed_dim", None)
         self.deterministic_step = getattr(args, "deterministic_step", False)
-        self.use_octree = getattr(args, "use_octree", False)
         self.track_max_probs = getattr(args, "track_max_probs", False)
 
         # ------------ Initialize Images ------------
@@ -255,8 +255,6 @@ class LocalImageEncoder(Encoder):
         parser.add_argument('--raymarching-stepsize-ratio', type=float, metavar='D',
                             help='if the concrete step size is not given (=0), '
                                  'we use the ratio to the voxel size as step size.')
-        parser.add_argument('--use-octree', action='store_true',
-                            help='if set, instead of looping over the voxels, we build an octree.')
         parser.add_argument('--track-max-probs', action='store_true',
                             help='if set, tracking the maximum probability in ray-marching.')
         parser.add_argument('--scene-scale', type=float, default=1.0)
@@ -290,13 +288,6 @@ class LocalImageEncoder(Encoder):
             'voxel_vertex_idx': feats,
             'voxel_center_xyz': points
         }
-
-        if self.use_octree:
-            flatten_centers, flatten_children = build_easy_octree(points, self.voxel_size / 2.0)
-            flatten_centers = flatten_centers.unsqueeze(0).expand(id.size(0), *flatten_centers.size()).contiguous()
-            flatten_children = flatten_children.unsqueeze(0).expand(id.size(0), *flatten_children.size()).contiguous()
-            encoder_states['voxel_octree_center_xyz'] = flatten_centers
-            encoder_states['voxel_octree_children_idx'] = flatten_children
         return encoder_states
 
     def ray_intersect(self, ray_start, ray_dir, encoder_states):
@@ -498,6 +489,9 @@ class SparseVoxelEncoder(LocalImageEncoder):
         self.register_buffer("keep", fine_feats.new_ones(fine_feats.size(0)).long())  # whether the voxel will be pruned
 
         logger.info("loaded {} voxel centers, {} voxel corners".format(fine_points.size(0), num_keys))
+
+        # set-up other hyperparameters and initialize running time caches
+        self.use_octree = getattr(args, "use_octree", False)
         self._runtime_caches = {
             "flatten_centers": None,
             "flatten_children": None,
