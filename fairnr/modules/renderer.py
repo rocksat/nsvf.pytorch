@@ -231,7 +231,7 @@ class VolumeRenderer(Renderer):
         sampled_idx = samples['sampled_point_voxel_idx'].long()
         original_depth = samples.get('original_point_depth', None)
         if type(input_fn) == LocalImageEncoder:
-            image_feature = self.extract_image_features(encoder_states['root_dir'])
+            image_feature = self.extract_image_features(encoder_states['path'])
             encoder_states['image_feature'] = image_feature
 
         tolerance = self.raymarching_tolerance

@@ -105,8 +105,8 @@ class ShapeDataset(FairseqDataset):
         intrinsics = data_utils.load_intrinsics(packed_data['ixt']).astype('float32') \
             if packed_data.get('ixt', None) is not None else None
         shape_id = packed_data['shape']
-        root_dir = packed_data['path']
-        shape_data = {'intrinsics': intrinsics, 'id': shape_id, 'root_dir': root_dir}
+        path = packed_data['path']
+        shape_data = {'intrinsics': intrinsics, 'id': shape_id, 'path': path}
         if packed_data.get('glb', None) is not None:   # additional global feature (if any)
            shape_data['global_index'] = np.loadtxt(packed_data['glb']).astype('int64')
         if packed_data.get('box', None) is not None:   # additional bbox
@@ -133,7 +133,7 @@ class ShapeDataset(FairseqDataset):
 
         results['shape'] = torch.from_numpy(np.array([s[0] for s in samples]))    
         for key in samples[0][1]:
-            if key == 'root_dir':
+            if key == 'path':
                 results[key] = [s[1][key] for s in samples]
             elif samples[0][1][key] is not None:
                 results[key] = torch.from_numpy(
@@ -345,7 +345,6 @@ class ShapeViewDataset(ShapeDataset):
                 rgb = rgb * mask[None, :, :] + (1 - mask[None, :, :]) * np.asarray(self.bg_color)[:, None, None]
 
         return {
-            'path': packed_data['rgb'][view_idx],
             'view': view_idx,
             'uv': uv.reshape(2, -1), 
             'colors': rgb.reshape(3, -1), 
