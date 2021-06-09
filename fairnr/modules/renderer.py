@@ -66,7 +66,6 @@ class VolumeRenderer(Renderer):
         self.raymarching_tolerance = getattr(args, "raymarching_tolerance", 0.0)
         self.trace_normal = getattr(args, "trace_normal", False)
         self.backbone = 'resnet34'
-        self.device = 'cpu' if self.args.cpu else 'cuda'
 
     @staticmethod
     def add_args(parser):
@@ -137,7 +136,7 @@ class VolumeRenderer(Renderer):
         features = upsampler(features_HxW)
         return features
 
-    def extract_image_features(self, data_path):
+    def extract_image_features(self, data_path, device):
         save_path = os.path.join(data_path, 'feature', '{}.pt'.format(self.backbone))
         if not os.path.exists(save_path):
             colors, extrinsics, intrinsics = self.load_dataset(data_path)
@@ -149,18 +148,17 @@ class VolumeRenderer(Renderer):
                 raise ValueError('unknown network backbone type')
             # save to local
             features_dict = {
-                'features': features.to(self.device),
-                'extrinsics': extrinsics.to(self.device),
-                'intrinsics': intrinsics.to(self.device)
+                'features': features.to(device),
+                'extrinsics': extrinsics.to(device),
+                'intrinsics': intrinsics.to(device)
             }
             if not os.path.exists(os.path.dirname(save_path)):
                 os.makedirs(os.path.dirname(save_path))
             torch.save(features_dict, save_path)
         else:
             # load precompute
-            features_dict = torch.load(save_path, map_location=self.device)
+            features_dict = torch.load(save_path, map_location=device)
         return features_dict
-
 
     def forward_once(
         self, input_fn, field_fn, ray_start, ray_dir, samples, encoder_states,
@@ -230,8 +228,9 @@ class VolumeRenderer(Renderer):
         sampled_depth = samples['sampled_point_depth']
         sampled_idx = samples['sampled_point_voxel_idx'].long()
         original_depth = samples.get('original_point_depth', None)
+        device = sampled_depth.device
         if type(input_fn) == LocalImageEncoder:
-            image_feature = self.extract_image_features(encoder_states['path'])
+            image_feature = self.extract_image_features(encoder_states['path'], device)
             encoder_states['image_feature'] = image_feature
 
         tolerance = self.raymarching_tolerance

@@ -209,7 +209,6 @@ class LocalImageEncoder(Encoder):
     """
     def __init__(self, args):
         super().__init__(args)
-        self.device = 'cpu' if self.args.cpu else 'cuda'
         voxel_size = 0.1 if getattr(args, "voxel_size", None) is None else args.voxel_size
 
         # ray-marching step size
@@ -261,6 +260,7 @@ class LocalImageEncoder(Encoder):
 
     def precompute(self, id, bbox, *args, **kwargs):
         assert id is not None
+        device = id.device
 
         # load bbox
         np_bbox = bbox.cpu().numpy()[0]
@@ -277,8 +277,8 @@ class LocalImageEncoder(Encoder):
         num_keys = torch.scalar_tensor(keys.size(0)).long()
 
         # extend size to support multi-objects
-        feats = feats.unsqueeze(0).expand(id.size(0), *feats.size()).contiguous().to(self.device)
-        points = points.unsqueeze(0).expand(id.size(0), *points.size()).contiguous().to(self.device)
+        feats = feats.unsqueeze(0).expand(id.size(0), *feats.size()).contiguous().to(device)
+        points = points.unsqueeze(0).expand(id.size(0), *points.size()).contiguous().to(device)
 
         # moving to multiple objects
         if id.size(0) > 1:
