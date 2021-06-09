@@ -265,7 +265,7 @@ class LocalImageEncoder(Encoder):
         assert id is not None
 
         # load bbox
-        np_bbox = bbox.cpu().numpy()[id.item()]
+        np_bbox = bbox.cpu().numpy()[0]
         np_voxel_size = self.voxel_size.cpu().numpy()
         points = torch.from_numpy(bbox2voxels(np_bbox[:6], np_voxel_size))
         half_voxel = np_voxel_size * .5
