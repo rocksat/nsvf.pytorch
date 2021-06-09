@@ -107,13 +107,12 @@ class VolumeRenderer(Renderer):
         return colors, extrinsics, torch.from_numpy(resized_intrinsics)
 
     @staticmethod
-    def extract_resnet34_features(colors, device):
+    def extract_resnet34_features(colors):
         resnet34 = torchvision.models.resnet.resnet34(pretrained=True)
         resnet34.fc = nn.Sequential()
         resnet34.avgpool = nn.Sequential()
-        resnet34 = resnet34.to(device)
 
-        x = resnet34.conv1(colors.to(device))
+        x = resnet34.conv1(colors)
         x = resnet34.bn1(x)
         x = resnet34.relu(x)
         latents = [x]
@@ -130,10 +129,10 @@ class VolumeRenderer(Renderer):
         return features
 
     @staticmethod
-    def extract_vgg16_features(colors, device, num_layers=3):
-        vgg16 = torchvision.models.vgg.vgg16(pretrained=True).to(device)
-        upsampler = torch.nn.Upsample(scale_factor=0.5, mode='bilinear', align_corners=False).to(device)
-        features_HxW = vgg16.features[:num_layers](colors.to(device))  # [N, 64, H, W]
+    def extract_vgg16_features(colors, num_layers=3):
+        vgg16 = torchvision.models.vgg.vgg16(pretrained=True)
+        upsampler = torch.nn.Upsample(scale_factor=0.5, mode='bilinear', align_corners=False)
+        features_HxW = vgg16.features[:num_layers](colors)  # [N, 64, H, W]
         features = upsampler(features_HxW)
         return features
 
@@ -149,14 +148,14 @@ class VolumeRenderer(Renderer):
                 raise ValueError('unknown network backbone type')
             # save to local
             features_dict = {
-                'features': features,
+                'features': features.to(device),
                 'extrinsics': extrinsics.to(device),
                 'intrinsics': intrinsics.to(device)
             }
             if not os.path.exists(os.path.dirname(save_path)):
                 os.makedirs(os.path.dirname(save_path))
-            if device in ['cpu', 'cuda:0']:
-                torch.save(features_dict, save_path)
+            # TODO: make sure thread safe
+            torch.save(features_dict, save_path)
         else:
             # load precompute
             features_dict = torch.load(save_path, map_location=device)
