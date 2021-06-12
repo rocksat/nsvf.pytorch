@@ -1,7 +1,7 @@
 name: NSVF Training
 
 setup_command: bash setup.sh
-command: bash run_multi.sh
+command: bash run.sh
 
 environment_variables:
   PYTHONPATH: /task_runtime/ostools:$PYTHONPATH

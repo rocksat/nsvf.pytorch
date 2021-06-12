@@ -35,5 +35,4 @@ pip3 install torch==1.4.0 torchvision==0.5.0
 pip3 install -r requirements.txt
 python3 setup.py build_ext --inplace
 
-
 echo_time "Setup step done"
