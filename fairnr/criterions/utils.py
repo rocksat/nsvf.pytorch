@@ -34,3 +34,13 @@ def depth_loss(depths, depth_gt, masks=None, sum=False):
 
     loss = (depths[masks] - depth_gt[masks]) ** 2
     return loss.mean() if not sum else loss.sum()
+
+
+def alpha_loss(alphas, masks=None, sum=False):
+    if masks is not None:
+        if masks.sum() == 0:
+            return alphas.new_zeros(1).mean()
+        alphas = alphas[masks]
+
+    loss = torch.min(alphas, 1-alphas)
+    return loss.mean() if not sum else loss.sum()

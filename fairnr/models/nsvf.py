@@ -97,7 +97,7 @@ class NSVFModel(NeRFModel):
         
         BG_DEPTH = self.field.bg_color.depth
         bg_color = self.field.bg_color(all_results['colors'])
-        all_results['colors'] += all_results['missed'].unsqueeze(-1) * bg_color.reshape(fullsize, 3).view(S, V, P, 3)
+        # all_results['colors'] += all_results['missed'].unsqueeze(-1) * bg_color.reshape(fullsize, 3).view(S, V, P, 3)
         all_results['depths'] += all_results['missed'] * BG_DEPTH
         if 'normal' in all_results:
             all_results['normal'] = fill_in((fullsize, 3), hits, all_results['normal'], 0.0).view(S, V, P, 3)

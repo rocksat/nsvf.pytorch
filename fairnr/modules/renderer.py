@@ -326,8 +326,14 @@ class VolumeRenderer(Renderer):
             assert 'transparency' in results
             bg_color_scale = results['transparency'][:, [-1]]
 
+            # construct object-id one-hot
+            batch_size = ray_start.shape[0]
+            cur_video_id = torch.ones([batch_size, 1], dtype=torch.int64, device=ray_start.device) * encoder_states['id']
+            onehot_emb = torch.FloatTensor(batch_size, self.args.num_videos).to(cur_video_id.device)
+            onehot_emb = onehot_emb.zero_().scatter_(1, cur_video_id, 1)
+
             # background color estimate
-            bg_fiend_inputs = {'pos': ray_start, 'ray': ray_dir}
+            bg_fiend_inputs = {'pos': ray_start, 'ray': ray_dir, 'emb': onehot_emb}
             bg_field_outputs = bg_field_fn(bg_fiend_inputs, outputs=['texture'])
 
             # add colors background term

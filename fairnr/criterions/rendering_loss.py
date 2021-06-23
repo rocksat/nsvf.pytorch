@@ -165,10 +165,7 @@ class SRNLossCriterion(RenderingCriterion):
             losses['color_loss'] = (color_loss, self.args.color_weight)
         
         if self.args.alpha_weight > 0:
-            _alpha = net_output['missed'].reshape(-1)
-            alpha_loss = torch.log1p(
-                1. / 0.11 * _alpha.float() * (1 - _alpha.float())
-            ).mean().type_as(_alpha)
+            alpha_loss = utils.alpha_loss(net_output['missed'], masks)
             losses['alpha_loss'] = (alpha_loss, self.args.alpha_weight)
 
         if self.args.depth_weight > 0:

@@ -163,7 +163,7 @@ class BaseModel(BaseFairseqModel):
                 for name, s in encoder_states.items()}
 
             # add path to encoder
-            encoder_states['path'] = kwargs['path'][0]
+            encoder_states.update({'id': kwargs['id'].item(), 'path': kwargs['path'][0]})
             samples, all_results = self.raymarching(               # ray-marching
                 ray_start, ray_dir, intersection_outputs, encoder_states)
             
