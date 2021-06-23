@@ -55,9 +55,10 @@ cd nsvf.pytorch && CUDA_VISIBLE_DEVICES=0 python3 train.py ${DATASET} \
     --background-stop-gradient \
     --arch $ARCH \
     --voxel-size 0.1 \
-    --raymarching-stepsize 0.005 \
+    --raymarching-stepsize 0.002 \
     --discrete-regularization \
-    --color-weight 1.0 \
+    --color-weight 10.0 \
+    --alpha-weight 1.0 \
     --optimizer "adam" \
     --adam-betas "(0.9, 0.999)" \
     --lr-scheduler "polynomial_decay" \
