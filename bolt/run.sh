@@ -1,5 +1,5 @@
 RES="480x640"
-ARCH="nsvf_image"
+ARCH="nsvf_image_bg"
 SUFFIX="v1"
 DATASET=/mnt/task_runtime/datasets
 SAVE=$BOLT_ARTIFACT_DIR/saved/
@@ -42,8 +42,8 @@ cd nsvf.pytorch && CUDA_VISIBLE_DEVICES=0 python3 train.py ${DATASET} \
     --train-views "0..90" \
     --view-resolution $RES \
     --max-sentences 1 \
-    --view-per-batch 2 \
-    --pixel-per-view 512 \
+    --view-per-batch 1 \
+    --pixel-per-view 1024 \
     --no-preload \
     --load-mask \
     --sampling-on-mask 1.0 \

@@ -65,7 +65,7 @@ class VolumeRenderer(Renderer):
         self.discrete_reg = getattr(args, "discrete_regularization", False)
         self.raymarching_tolerance = getattr(args, "raymarching_tolerance", 0.0)
         self.trace_normal = getattr(args, "trace_normal", False)
-        self.backbone = 'resnet34'
+        self.backbone = getattr(args, 'backbone', 'resnet34')
 
     @staticmethod
     def add_args(parser):
@@ -220,7 +220,7 @@ class VolumeRenderer(Renderer):
         return outputs, sample_mask.sum()
 
     def forward_chunk(
-        self, input_fn, bg_field_fn, field_fn, ray_start, ray_dir, BG_DEPTH, samples, encoder_states,
+        self, input_fn, bg_field_fn, field_fn, ray_start, ray_dir, samples, encoder_states,
         gt_depths=None, output_types=['sigma', 'texture'], global_weights=None,
         ):
         if self.trace_normal:
@@ -339,20 +339,17 @@ class VolumeRenderer(Renderer):
             # add colors background term
             results['colors'] += bg_color_scale * bg_field_outputs['texture']
 
-            # add depth background term
-            results['depths'] += results['transparency'][:, -1] * field_fn.bg_color.depth
-
         return results
 
-    def forward(self, input_fn, bg_field_fn, field_fn, ray_start, ray_dir, BG_DEPTH, samples, *args, **kwargs):
+    def forward(self, input_fn, bg_field_fn, field_fn, ray_start, ray_dir, samples, *args, **kwargs):
         chunk_size = self.chunk_size if self.training else self.valid_chunk_size
         if ray_start.size(0) <= chunk_size:
-            results = self.forward_chunk(input_fn, bg_field_fn, field_fn, ray_start, ray_dir, BG_DEPTH, samples, *args, **kwargs)
+            results = self.forward_chunk(input_fn, bg_field_fn, field_fn, ray_start, ray_dir, samples, *args, **kwargs)
         else:
             # the number of rays is larger than maximum forward passes. pre-chuncking..
             results = [
                 self.forward_chunk(input_fn, bg_field_fn, field_fn,
-                    ray_start[i: i+chunk_size], ray_dir[i: i+chunk_size], BG_DEPTH,
+                    ray_start[i: i+chunk_size], ray_dir[i: i+chunk_size],
                     {name: s[i: i+chunk_size] for name, s in samples.items()}, *args, **kwargs)
                 for i in range(0, ray_start.size(0), chunk_size)
             ]
