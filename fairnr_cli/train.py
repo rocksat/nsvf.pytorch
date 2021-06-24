@@ -106,9 +106,7 @@ def main(args, init_distributed=False):
         and epoch_itr.next_epoch_idx <= max_epoch
     ):
         # train for one epoch
-        should_end_training = train(args, trainer, task, epoch_itr)
-
-        valid_losses = validate_and_save(args, trainer, task, epoch_itr, valid_subsets)
+        should_end_training, valid_losses = train(args, trainer, task, epoch_itr)
 
         # only use first validation loss to update the learning rate
         lr = trainer.lr_step(epoch_itr.epoch, valid_losses[0])
@@ -180,6 +178,8 @@ def train(args, trainer, task, epoch_itr):
     valid_subsets = args.valid_subset.split(',')
     max_update = args.max_update or math.inf
     should_end_training = False
+    valid_losses = [None]
+
     for samples in progress:
         with metrics.aggregate('train_inner'):
             try:
@@ -217,7 +217,7 @@ def train(args, trainer, task, epoch_itr):
 
     # reset epoch-level meters
     metrics.reset_meters('train')
-    return should_end_training
+    return should_end_training, valid_losses
 
 
 def validate_and_save(args, trainer, task, epoch_itr, valid_subsets):
