@@ -309,7 +309,7 @@ def validate(args, trainer, task, epoch_itr, subsets):
                 plog = progress.log
                 if hasattr(progress, "wrapped_bar"):
                     plog = progress.wrapped_bar.log
-                plog(stats, tag='valid', step=step)
+                plog(stats, tag='valid', step=step+1)
 
         # log validation stats
         stats = get_valid_stats(args, trainer, agg.get_smoothed_values())
